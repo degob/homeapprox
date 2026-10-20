@@ -212,3 +212,48 @@ Umsteige-Name nicht im grauen Block, sondern als Sprechblase. Abkürzung: Start 
   - anderer Ort: «Zürich HB» → «ZHB», «Wallisellen, Bahnhof» → «WBahn»
   - nur Ort: «Wallisellen» → «Walli»
 - Keine Kollisionsprüfung, Blasen können sich bei nahen Umstiegen überlappen.
+
+---
+
+## User
+
+Wort «Bahnhof» weglassen. «Zürich Oerlikon» → Orts-Initiale immer (Gleicher-Ort-Regel entfällt), max. 6 Buchstaben total. Tipp ins Ort-Feld nach einer Suche: Favoriten + Zuletzt zeigen, nicht Treffer zum aktuellen Text.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- `stopAbbr`: Orts-Initiale + Rest, Wort «Bahnhof» entfernt, `STOP_ABBR_MAX = 6`. Zürich Oerlikon → ZOerli, Zürich HB → ZHB, Zürich, Bahnhofplatz/HB → ZBahnh, Wallisellen (, Bahnhof) → Wallis.
+- Fokus im Ort-Feld: immer Favoriten + Zuletzt, Text markiert (Tippen ersetzt ihn). Tippen: Treffer wie bisher.
+
+---
+
+## User
+
+Sprechblasen auch für Start und Ende. Vertikal scrollen = Verbindungen, horizontal = Balken. Pinch-Zoom vergrössert die Balken, damit mehr Platz für Details ist.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Blasen: Start (Spitze links), Umsteigen (Mitte), Ende (Spitze rechts). `fitPins()`: pro Balken voller Name, wenn sich keine Blasen überlappen, sonst Abkürzung.
+- `.track` (overflow-x) um jeden Balken, Breite `100% × --zoom`. Alle Tracks scrollen synchron; Zoom und Position bleiben beim Toggle erhalten.
+- `Timeline`: Pinch (2 Finger, `touch-action: pan-x pan-y` + preventDefault) bzw. Ctrl+Mausrad zoomt 1–8×, Punkt unter den Fingern bleibt fix. Linien-Labels und Blasen werden danach neu eingepasst.
+- Ungetestet auf echtem Mobilgerät (nur Desktop-Chromium mit Ctrl+Wheel).
+
+---
+
+## User
+
+Beim vertikalen Scrollen automatisch horizontal mitscrollen, damit die Balken der sichtbaren Verbindungen im Bild sind.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- `Timeline.followViewport()`: bei Zoom > 1 und Seiten-Scroll wird die früheste Startzeit der sichtbaren Verbindungen an den linken Rand gesetzt (8 px Rand).
+
+Frage: Warum keine Vorschläge ab Furtbach? Vermutete Ursachen (nicht verifiziert):
+1. API routet «nach Furtbach» mit Fussweg am Ende (z. B. Bahnhof Wallisellen → zu Fuss) → von `homeEndIsClean` verworfen.
+2. HAFAS liefert keine dominierten Verbindungen (später an, mehr Umstiege), daher fehlt die Bus-Variante.
+3. Nur 4 Verbindungen pro Haltestelle (`CONNECTIONS_PER_STOP`).

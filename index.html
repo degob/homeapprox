@@ -84,7 +84,14 @@ li.clickable { cursor: pointer; }
 .details li { padding: .15rem 0; border: 0; }
 
 /* Timeline: walk = dotted green, transit = solid blue, shared time axis. */
-.bar { position: relative; height: 18px; margin: .4rem 0; }
+/* Track scrolls horizontally when zoomed; all tracks scroll together.
+   touch-action keeps native pans but leaves pinch to our zoom handler. */
+.track {
+  overflow-x: auto; overflow-y: hidden; margin: .4rem 0; padding-top: 1.5rem;
+  scrollbar-width: none; touch-action: pan-x pan-y;
+}
+.track::-webkit-scrollbar { display: none; }
+.bar { position: relative; height: 18px; width: calc(100% * var(--zoom, 1)); }
 .bar span { position: absolute; top: 0; height: 100%; border-radius: 4px; }
 .bar .walk { background: repeating-linear-gradient(90deg, var(--walk) 0 4px, transparent 4px 7px); top: 7px; height: 4px; }
 .bar .transit { background: var(--transit); }
@@ -98,8 +105,8 @@ li.clickable { cursor: pointer; }
   font-size: .72rem; font-weight: 700; line-height: 18px;
 }
 .bar .transit.lbl { color: var(--bg); }
-/* Transfer stop: speech bubble above the bar, tip at the gap's middle. */
-.bar.pinned { margin-top: 1.5rem; }
+/* Stop bubble above the bar. Transfer: tip at the gap's middle.
+   Start/end: tip at the bubble's left/right edge, so it stays inside the track. */
 .bar .pin {
   top: auto; bottom: calc(100% + 5px); height: auto; transform: translateX(-50%);
   padding: 0 .3rem; border-radius: 4px; white-space: nowrap;
@@ -109,6 +116,10 @@ li.clickable { cursor: pointer; }
   content: ""; position: absolute; left: 50%; top: 100%; margin-left: -4px;
   border: 4px solid transparent; border-top-color: var(--muted);
 }
+.bar .pin.start { transform: none; }
+.bar .pin.start::after { left: 0; margin-left: 0; }
+.bar .pin.end { transform: translateX(-100%); }
+.bar .pin.end::after { left: auto; right: 0; margin-left: 0; }
 
 /* Place field with suggestion dropdown. */
 .place { position: relative; flex: 1 1 14rem; }
@@ -192,6 +203,32 @@ const HOME_STOPS = Object.freeze([
   { name: "Wallisellen", walkMin: 15 },
 ]);
 
+// Feeder lines: the API often replaces a short bus/tram ride from a home stop
+// by a walk (walk = later departure, same arrival), so it never offers them.
+// We build these ourselves: departure board for the feeder + connections from
+// the hub where it ends.
+//   Home ──walk──► stop ──line──► alight ┄change┄► hub ──API──► Place
+// stop:   HOME_STOPS name (walk time). board: timetable name of the stop where
+//         the line halts (may differ, e.g. "(Bus)"/"(Tram)").
+// alight: stop of the line near the hub. hub: station for the API query.
+const FEEDERS = Object.freeze([
+  { stop: "Wallisellen, Furtbach", board: "Wallisellen, Furtbach", lines: ["772"], mode: "bus",
+    alight: "Wallisellen, Bahnhof", hub: "Wallisellen", changeMin: 4 },
+  { stop: "Wallisellen, Ifang", board: "Wallisellen, Ifang", lines: ["787"], mode: "bus",
+    alight: "Dietlikon, Bahnhof Ost", hub: "Dietlikon", changeMin: 4 },
+  { stop: "Wallisellen, Ifang", board: "Wallisellen, Ifang", lines: ["787"], mode: "bus",
+    alight: "Zürich Oerlikon, Bahnhof Ost", hub: "Zürich Oerlikon", changeMin: 5 },
+  { stop: "Wallisellen, Glatt", board: "Wallisellen, Glatt (Bus)", lines: ["787"], mode: "bus",
+    alight: "Zürich Oerlikon, Bahnhof Ost", hub: "Zürich Oerlikon", changeMin: 5 },
+  { stop: "Wallisellen, Glatt", board: "Wallisellen, Glatt (Bus)", lines: ["61"], mode: "bus",
+    alight: "Zürich Oerlikon, Bahnhof", hub: "Zürich Oerlikon", changeMin: 5 },
+  { stop: "Wallisellen, Glatt", board: "Wallisellen, Glatt (Tram)", lines: ["12"], mode: "tram",
+    alight: "Stettbach, Bahnhof", hub: "Stettbach", changeMin: 4 },
+]);
+const BOARD_LIMIT = 40;
+const BOARD_LOOKBACK_MIN = 60; // board window before the first hub train (arrive mode)
+const FEEDER_ARRIVE_SLACK_MIN = 25; // rough feeder ride + change, toHome + arrive
+
 const Direction = Object.freeze({ TO_HOME: "toHome", FROM_HOME: "fromHome" });
 const TimeRef = Object.freeze({ DEPART: "depart", ARRIVE: "arrive" });
 const LegKind = Object.freeze({ RIDE: "ride", WALK: "walk", CHANGE: "change" });
@@ -200,7 +237,7 @@ const WalkMode = Object.freeze({ SHOW: "show", HIDE: "hide" });
 
 const API_BASE = "https://transport.opendata.ch/v1";
 const CONNECTIONS_PER_STOP = 4;
-const MAX_RESULTS = 10;
+const MAX_RESULTS = 15;
 const STOP_ABBR_MAX = 6;
 const MS_PER_MIN = 60_000;
 const MS_PER_SEC = 1_000;
@@ -314,7 +351,62 @@ const TransportApi = (() => {
     return (data.connections || []).map(toTrip);
   }
 
-  return { connections, locations };
+  const fmtBoardTime = (d) => `${fmtDate(d)} ${fmtTime(d)}`;
+
+  // Same board requested by several feeders in one search: fetch once.
+  const boardCache = new Map();
+  const BOARD_CACHE_MS = 60_000;
+
+  async function board(params) {
+    const key = params.toString();
+    const hit = boardCache.get(key);
+    if (hit && Date.now() - hit.at < BOARD_CACHE_MS) {
+      return hit.data;
+    }
+    const data = fetch(`${API_BASE}/stationboard?${params}`).then((res) => {
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      return res.json();
+    });
+    boardCache.set(key, { at: Date.now(), data });
+    data.catch(() => boardCache.delete(key));
+    return data;
+  }
+
+  // Departure board: rides of `lines` from `station` that later halt at
+  // `target`, as plain ride legs station → target.
+  async function feederRides(station, target, lines, mode, at) {
+    const params = new URLSearchParams({
+      station,
+      datetime: fmtBoardTime(at),
+      limit: String(BOARD_LIMIT),
+    });
+    params.append("transportations[]", mode);
+    const data = await board(params);
+    return (data.stationboard || [])
+      .filter((e) => lines.includes(String(e.number)))
+      .map((e) => {
+        const stopAt = (e.passList || []).find((p) => p.station?.name === target);
+        if (!stopAt?.arrivalTimestamp) {
+          return null;
+        }
+        return {
+          kind: LegKind.RIDE,
+          line: lineLabel(e),
+          headsign: e.to || "",
+          from: e.stop.station?.name || station,
+          dep: new Date(e.stop.departureTimestamp * MS_PER_SEC),
+          platform: e.stop.platform || "",
+          to: target,
+          arr: new Date(stopAt.arrivalTimestamp * MS_PER_SEC),
+          walkSec: 0,
+        };
+      })
+      .filter(Boolean);
+  }
+
+  return { connections, locations, feederRides, toTransfers };
 })();
 
 // ---------- Planner: domain logic, adds walking around the transit leg ----------
@@ -340,6 +432,8 @@ const Planner = (() => {
     const toHome = dir === Direction.TO_HOME;
     return {
       stop: toHome ? trip.to : trip.from,
+      from: trip.from,
+      to: trip.to,
       walkMin: stop.walkMin,
       walkFirst: !toHome,
       start: toHome ? trip.dep : shift(trip.dep, -stop.walkMin),
@@ -377,21 +471,110 @@ const Planner = (() => {
       .map((trip) => toJourney(trip, stop, dir, query));
   }
 
-  // Queries all stops in parallel; one failing stop doesn't block the others.
+  // Feeder trip = feeder ride + hub trip (fromHome) or hub trip + feeder ride
+  // (toHome). Matched so the change at the hub takes at least changeMin.
+  //   fromHome: latest ride with arr + change ≤ hub dep
+  //   toHome:   earliest ride with dep ≥ hub arr + change
+  function joinFeeder(hubTrip, rides, f, dir) {
+    const fromHome = dir === Direction.FROM_HOME;
+    const ride = fromHome
+      ? rides.filter((r) => shift(r.arr, f.changeMin) <= hubTrip.dep).sort((a, b) => b.arr - a.arr)[0]
+      : rides.filter((r) => r.dep >= shift(hubTrip.arr, f.changeMin)).sort((a, b) => a.dep - b.dep)[0];
+    if (!ride) {
+      return null;
+    }
+    const legs = fromHome ? [ride, ...hubTrip.legs] : [...hubTrip.legs, ride];
+    const rideLines = [...new Set(legs.filter((l) => l.kind === LegKind.RIDE).map((l) => l.line))];
+    return {
+      from: fromHome ? ride.from : hubTrip.from,
+      to: fromHome ? hubTrip.to : ride.to,
+      dep: fromHome ? ride.dep : hubTrip.dep,
+      arr: fromHome ? hubTrip.arr : ride.arr,
+      lines: rideLines.join(", "),
+      transfers: TransportApi.toTransfers(legs),
+      legs,
+    };
+  }
+
+  // One feeder: hub connections + departure board, sequenced so the board
+  // window covers the hub trains (fromHome) or hub arrivals (toHome).
+  async function forFeeder(f, place, at, dir, timeRef) {
+    const stop = HOME_STOPS.find((s) => s.name === f.stop);
+    const fromHome = dir === Direction.FROM_HOME;
+    const [boardAt, target] = fromHome ? [f.board, f.alight] : [f.alight, f.board];
+    const [from, to] = fromHome ? [f.hub, place] : [place, f.hub];
+    let hubTrips;
+    let rides;
+    let hubTime;
+
+    if (fromHome && timeRef === TimeRef.DEPART) {
+      rides = await TransportApi.feederRides(boardAt, target, f.lines, f.mode, shift(at, stop.walkMin));
+      if (!rides.length) {
+        return [];
+      }
+      hubTime = shift(rides[0].arr, f.changeMin);
+      hubTrips = await TransportApi.connections(from, to, hubTime, timeRef);
+    } else {
+      hubTime = !fromHome && timeRef === TimeRef.ARRIVE
+        ? shift(at, -stop.walkMin - FEEDER_ARRIVE_SLACK_MIN)
+        : at;
+      hubTrips = await TransportApi.connections(from, to, hubTime, timeRef);
+      hubTrips = hubTrips.filter((t) => homeEndIsClean(t, dir));
+      if (!hubTrips.length) {
+        return [];
+      }
+      const boardTime = fromHome
+        ? shift(new Date(Math.min(...hubTrips.map((t) => t.dep))), -BOARD_LOOKBACK_MIN)
+        : shift(new Date(Math.min(...hubTrips.map((t) => t.arr))), f.changeMin);
+      rides = await TransportApi.feederRides(boardAt, target, f.lines, f.mode, boardTime);
+    }
+
+    const query = { from, to, at: hubTime, timeRef, feeder: `${f.lines.join("/")} ${f.board} ↔ ${f.alight}` };
+    return hubTrips
+      .filter((t) => homeEndIsClean(t, dir))
+      .map((t) => joinFeeder(t, rides, f, dir))
+      .filter(Boolean)
+      .map((trip) => toJourney(trip, stop, dir, query));
+  }
+
+  // Same rides at the same times = same journey (API result and feeder build
+  // can coincide); the first one wins.
+  function dedupe(journeys) {
+    const seen = new Set();
+    return journeys.filter((j) => {
+      const key = j.legs
+        .filter((l) => l.kind === LegKind.RIDE)
+        .map((l) => `${l.line}@${l.dep.getTime()}`)
+        .join("|");
+      if (seen.has(key)) {
+        return false;
+      }
+      seen.add(key);
+      return true;
+    });
+  }
+
+  // Queries all stops and feeders in parallel; one failing doesn't block the others.
   async function plan(place, at, dir, timeRef) {
-    const settled = await Promise.allSettled(
-      HOME_STOPS.map((s) => forStop(s, place, at, dir, timeRef))
-    );
+    const tasks = [
+      ...HOME_STOPS.map((s) => ({ label: s.name, run: () => forStop(s, place, at, dir, timeRef) })),
+      ...FEEDERS.map((f) => ({
+        label: `${f.stop} (${f.lines.join("/")} → ${f.hub})`,
+        run: () => forFeeder(f, place, at, dir, timeRef),
+      })),
+    ];
+    const settled = await Promise.allSettled(tasks.map((t) => t.run()));
 
     const failed = [];
     let journeys = [];
     settled.forEach((r, i) => {
       if (r.status === "rejected") {
-        failed.push(HOME_STOPS[i].name);
+        failed.push(tasks[i].label);
         return;
       }
       journeys = journeys.concat(r.value);
     });
+    journeys = dedupe(journeys);
 
     // Keep journeys within the requested window, ordered by departure.
     const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
@@ -525,15 +708,40 @@ function labelled(cls, from, to, t0, t1, texts, title) {
   return span;
 }
 
-// Bubble above the bar, pointing at the middle of the transfer gap.
-function transferPin(x, abbr, t0, t1) {
+// Bubble above the bar for a stop. `align`: where the tip sits (see CSS).
+// Text is chosen by fitPins(): full name if there is room, else abbreviation.
+function stopPin(name, at, align, t0, t1) {
   const pin = document.createElement("span");
-  const mid = (x.from.getTime() + x.to.getTime()) / 2;
-  pin.className = "pin";
-  pin.style.left = `${((mid - t0) / (t1 - t0 || 1)) * 100}%`;
-  pin.textContent = abbr;
-  pin.title = x.stop;
+  pin.className = `pin ${align}`;
+  pin.style.left = `${((at - t0) / (t1 - t0 || 1)) * 100}%`;
+  pin.dataset.texts = JSON.stringify([...new Set([name, Planner.stopAbbr(name)])]);
+  pin.title = name;
   return pin;
+}
+
+const PIN_GAP_PX = 3;
+
+// Per bar: longest text form that lets no two bubbles overlap, same form for
+// all bubbles of the bar so they read consistently. Zooming in gives room.
+function fitPins(root) {
+  root.querySelectorAll(".bar").forEach((bar) => {
+    const pins = [...bar.querySelectorAll(".pin")];
+    if (!pins.length) {
+      return;
+    }
+    const forms = pins.map((p) => JSON.parse(p.dataset.texts));
+    const levels = Math.max(...forms.map((f) => f.length));
+    for (let lvl = 0; lvl < levels; lvl++) {
+      pins.forEach((p, i) => {
+        p.textContent = forms[i][Math.min(lvl, forms[i].length - 1)];
+      });
+      const rects = pins.map((p) => p.getBoundingClientRect()).sort((a, b) => a.left - b.left);
+      const overlap = rects.some((r, i) => i > 0 && rects[i - 1].right + PIN_GAP_PX > r.left);
+      if (!overlap) {
+        return;
+      }
+    }
+  });
 }
 
 // Must run once the bar is laid out: first text that fits, else none.
@@ -549,10 +757,12 @@ function fitLabels(root) {
     }
     el.textContent = "";
   });
+  fitPins(root);
 }
 
 function renderJourney(j, t0, t1) {
   const li = document.createElement("li");
+  li.dataset.startFrac = String((j.start - t0) / (t1 - t0 || 1));
 
   const times = document.createElement("div");
   times.className = "times";
@@ -562,12 +772,15 @@ function renderJourney(j, t0, t1) {
   dur.textContent = `${minutes(j.start, j.end)} Min.`;
   times.append(dur);
 
+  const track = document.createElement("div");
+  track.className = "track";
   const bar = document.createElement("div");
   bar.className = "bar";
   bar.setAttribute("aria-hidden", "true");
+  track.append(bar);
   // Home walk, a wait track under the whole transit span, gray transfer blocks,
   // then each API leg (ride = solid blue with line, walk = dotted; short change
-  // walks are covered by the transfer block), then a bubble per transfer stop.
+  // walks are covered by the transfer block), then bubbles: start, transfers, end.
   const walkFrom = j.walkFirst ? j.start : j.transitEnd;
   const walkTo = j.walkFirst ? j.transitStart : j.end;
   const legSeg = (l) => {
@@ -576,7 +789,6 @@ function renderJourney(j, t0, t1) {
     }
     return l.kind === LegKind.WALK ? segment("walk", l.dep, l.arr, t0, t1) : null;
   };
-  bar.classList.toggle("pinned", j.transfers.length > 0);
   bar.append(
     segment("walk", walkFrom, walkTo, t0, t1),
     segment("wait", j.transitStart, j.transitEnd, t0, t1),
@@ -584,9 +796,11 @@ function renderJourney(j, t0, t1) {
     ...(j.legs.length
       ? j.legs.map(legSeg).filter(Boolean)
       : [labelled("transit", j.transitStart, j.transitEnd, t0, t1, [j.lines], j.lines)]),
+    stopPin(j.from, j.transitStart, "start", t0, t1),
     ...j.transfers.map((x) =>
-      transferPin(x, Planner.stopAbbr(x.stop), t0, t1)
-    )
+      stopPin(x.stop, new Date((x.from.getTime() + x.to.getTime()) / 2), "", t0, t1)
+    ),
+    stopPin(j.to, j.transitEnd, "end", t0, t1)
   );
 
   const meta = document.createElement("div");
@@ -594,7 +808,7 @@ function renderJourney(j, t0, t1) {
   const extra = j.hasExtraWalk ? " · + Fussweg" : "";
   meta.textContent = `${j.stop} · ${j.lines}${extra}`;
 
-  li.append(times, bar, meta);
+  li.append(times, track, meta);
 
   if (j.transfers.length) {
     const xfer = document.createElement("div");
@@ -638,7 +852,8 @@ function renderDetails(j) {
   const q = document.createElement("div");
   q.className = "meta";
   const ref = j.query.timeRef === TimeRef.ARRIVE ? "an" : "ab";
-  q.textContent = `Abfrage: ${j.query.from} → ${j.query.to}, ${ref} ${hhmm(j.query.at)}`;
+  const feeder = j.query.feeder ? ` + Zubringer ${j.query.feeder}` : "";
+  q.textContent = `Abfrage: ${j.query.from} → ${j.query.to}, ${ref} ${hhmm(j.query.at)}${feeder}`;
 
   box.append(legs, q);
   return box;
@@ -758,8 +973,157 @@ function render() {
   const t0 = Math.min(...journeys.map((j) => j.start));
   const t1 = Math.max(...journeys.map((j) => j.end));
   journeys.forEach((j) => list.append(renderJourney(j, t0, t1)));
+  Timeline.restore(list);
   fitLabels(list);
 }
+
+// ---------- Timeline zoom: pinch / Ctrl+wheel widens all bars, swipe scrolls ----------
+
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 8;
+const WHEEL_ZOOM_STEP = 1.1;
+const FOLLOW_MARGIN_PX = 8;
+
+const Timeline = (() => {
+  let zoom = ZOOM_MIN;
+  let scrollFrac = 0; // left edge as share of the bar width, kept across re-renders
+  let syncing = false;
+  let fitQueued = false;
+
+  const root = () => $("results");
+  const tracks = () => [...root().querySelectorAll(".track")];
+  const clamp = (z) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+
+  function scrollAll(left, except) {
+    syncing = true;
+    tracks().forEach((t) => {
+      if (t !== except) {
+        t.scrollLeft = left;
+      }
+    });
+    requestAnimationFrame(() => {
+      syncing = false;
+    });
+  }
+
+  function queueFit() {
+    if (fitQueued) {
+      return;
+    }
+    fitQueued = true;
+    requestAnimationFrame(() => {
+      fitQueued = false;
+      fitLabels(root());
+    });
+  }
+
+  // Zooms so the time under screen x `clientX` stays under it.
+  function zoomAt(newZoom, clientX, track) {
+    const z = clamp(newZoom);
+    const box = track.getBoundingClientRect();
+    const frac = (track.scrollLeft + clientX - box.left) / track.scrollWidth;
+    zoom = z;
+    root().style.setProperty("--zoom", String(z));
+    const left = frac * track.scrollWidth - (clientX - box.left);
+    track.scrollLeft = left;
+    scrollAll(track.scrollLeft, track);
+    scrollFrac = track.scrollLeft / track.scrollWidth;
+    queueFit();
+  }
+
+  // After a re-render: same zoom and position as before.
+  function restore(list) {
+    list.style.setProperty("--zoom", String(zoom));
+    const first = list.querySelector(".track");
+    if (first) {
+      scrollAll(scrollFrac * first.scrollWidth);
+    }
+  }
+
+  function onScroll(e) {
+    const t = e.target;
+    if (!(t instanceof Element) || !t.classList.contains("track") || syncing) {
+      return;
+    }
+    scrollFrac = t.scrollLeft / t.scrollWidth;
+    scrollAll(t.scrollLeft, t);
+  }
+
+  let pinch = null;
+  const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
+
+  function onTouchStart(e) {
+    const track = e.target.closest?.(".track") || root().querySelector(".track");
+    if (e.touches.length !== 2 || !track) {
+      return;
+    }
+    pinch = { d: dist(e.touches[0], e.touches[1]), zoom, track };
+  }
+
+  function onTouchMove(e) {
+    if (!pinch || e.touches.length !== 2) {
+      return;
+    }
+    e.preventDefault();
+    const [a, b] = e.touches;
+    zoomAt(pinch.zoom * (dist(a, b) / pinch.d), (a.clientX + b.clientX) / 2, pinch.track);
+  }
+
+  function onTouchEnd(e) {
+    if (e.touches.length < 2) {
+      pinch = null;
+    }
+  }
+
+  // Desktop: Ctrl+wheel (also trackpad pinch) zooms, Shift+wheel scrolls natively.
+  function onWheel(e) {
+    const track = e.target.closest?.(".track");
+    if (!e.ctrlKey || !track) {
+      return;
+    }
+    e.preventDefault();
+    zoomAt(zoom * (e.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP), e.clientX, track);
+  }
+
+  // Vertical scroll: move the timeline so the earliest start among the
+  // connections on screen sits at the left edge.
+  let followQueued = false;
+  function followViewport() {
+    if (zoom <= ZOOM_MIN || pinch || followQueued) {
+      return;
+    }
+    followQueued = true;
+    requestAnimationFrame(() => {
+      followQueued = false;
+      const onScreen = [...root().children].filter((li) => {
+        const r = li.getBoundingClientRect();
+        return r.bottom > 0 && r.top < window.innerHeight;
+      });
+      const first = root().querySelector(".track");
+      if (!onScreen.length || !first) {
+        return;
+      }
+      const frac = Math.min(...onScreen.map((li) => Number(li.dataset.startFrac)));
+      scrollAll(Math.max(0, frac * first.scrollWidth - FOLLOW_MARGIN_PX));
+      scrollFrac = first.scrollLeft / first.scrollWidth;
+    });
+  }
+
+  function init() {
+    const r = root();
+    window.addEventListener("scroll", followViewport, { passive: true });
+    r.addEventListener("scroll", onScroll, true); // scroll doesn't bubble
+    r.addEventListener("touchstart", onTouchStart, { passive: true });
+    r.addEventListener("touchmove", onTouchMove, { passive: false });
+    r.addEventListener("touchend", onTouchEnd);
+    r.addEventListener("touchcancel", onTouchEnd);
+    r.addEventListener("wheel", onWheel, { passive: false });
+    // iOS Safari: block page zoom while pinching the timeline.
+    r.addEventListener("gesturestart", (e) => e.preventDefault());
+  }
+
+  return { init, restore };
+})();
 
 async function onSubmit(e) {
   e.preventDefault();
@@ -790,6 +1154,7 @@ async function onSubmit(e) {
 }
 
 initInputs();
+Timeline.init();
 $("form").addEventListener("submit", onSubmit);
 $("place").addEventListener("input", onPlaceInput);
 // Tap on the field: favorites + recent, not hits for the current text.
