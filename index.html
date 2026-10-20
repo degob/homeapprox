@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HomeApprox</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f3f5f7;
+  --surface: #ffffff;
+  --ink: #1c2430;
+  --muted: #6b7685;
+  --line: #d9dee4;
+  --transit: #2b5a8c;
+  --walk: #3e8a5e;
+  --error: #b3261e;
+  color-scheme: light;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161b22;
+    --surface: #1f262f;
+    --ink: #e6eaef;
+    --muted: #97a1ae;
+    --line: #333c47;
+    --transit: #7fb0e3;
+    --walk: #7cc79a;
+    --error: #f2b8b5;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161b22; --surface: #1f262f; --ink: #e6eaef; --muted: #97a1ae;
+  --line: #333c47; --transit: #7fb0e3; --walk: #7cc79a; --error: #f2b8b5;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: inherit; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 17px/1.5 "Atkinson Hyperlegible", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+main { max-width: 42rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+h1 { font-size: 1.6rem; margin: 0 0 1.25rem; }
+
+form { display: grid; gap: .9rem; }
+.row { display: flex; flex-wrap: wrap; gap: .6rem; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; }
+.seg label { padding: .45rem .9rem; cursor: pointer; }
+.seg input:checked + label { background: var(--transit); color: var(--bg); }
+.seg input:focus-visible + label { outline: 2px solid var(--transit); outline-offset: -4px; }
+input[type=text], input[type=date], input[type=time] {
+  font: inherit; color: inherit; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; padding: .45rem .6rem;
+}
+input[type=text] { flex: 1 1 14rem; }
+button {
+  font: inherit; font-weight: 700; border: 0; border-radius: 8px;
+  padding: .6rem 1.2rem; background: var(--transit); color: var(--bg); cursor: pointer;
+}
+button:focus-visible, input:focus-visible { outline: 2px solid var(--transit); outline-offset: 2px; }
+
+#status { color: var(--muted); margin: 1.25rem 0 .5rem; min-height: 1.5em; }
+#status.error { color: var(--error); }
+
+ol { list-style: none; padding: 0; margin: 0; }
+li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
+.times { font-size: 1.35rem; font-weight: 700; }
+.dur { color: var(--muted); font-size: 1rem; font-weight: 400; margin-left: .5rem; }
+.meta { color: var(--muted); font-size: .95rem; }
+li.clickable { cursor: pointer; }
+.check { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .95rem; }
+.details { margin-top: .5rem; padding: .5rem .75rem; background: var(--surface); border-radius: 8px; font-size: .95rem; }
+.details ul { list-style: none; padding: 0; margin: 0 0 .4rem; }
+.details li { padding: .15rem 0; border: 0; }
+
+/* Timeline: walk = dotted green, transit = solid blue, shared time axis. */
+.bar { position: relative; height: 10px; margin: .4rem 0; }
+.bar span { position: absolute; top: 0; height: 100%; border-radius: 5px; }
+.bar .walk { background: repeating-linear-gradient(90deg, var(--walk) 0 4px, transparent 4px 7px); top: 3px; height: 4px; }
+.bar .transit { background: var(--transit); }
+/* Wait / platform change: thin muted track, visible only where no leg covers it. */
+.bar .wait { background: var(--line); top: 3px; height: 4px; }
+/* Transfer marker: small dot on the transit bar. */
+.bar .xfer {
+  width: 6px; height: 6px; top: 2px; margin-left: -3px;
+  background: var(--bg); border: 1px solid var(--surface); border-radius: 50%;
+}
+
+/* Place field with suggestion dropdown. */
+.place { position: relative; flex: 1 1 14rem; }
+.place input { width: 100%; }
+.sugg {
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 2;
+  margin: .2rem 0 0; padding: .25rem 0; list-style: none;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.12);
+}
+.sugg:empty { display: none; }
+.sugg li { display: flex; align-items: center; gap: .5rem; padding: .35rem .6rem; border: 0; cursor: pointer; }
+.sugg li:hover, .sugg li[aria-selected="true"] { background: var(--bg); }
+.sugg .name { flex: 1; }
+.sugg .group { color: var(--muted); font-size: .8rem; padding: .2rem .6rem 0; cursor: default; }
+.sugg .group:hover { background: none; }
+.star { background: none; color: var(--muted); padding: 0 .2rem; font-size: 1.1rem; line-height: 1; }
+.star.on { color: var(--transit); }
+</style>
+</head>
+<body>
+<main>
+<h1>HomeApprox</h1>
+
+<form id="form">
+  <div class="row">
+    <div class="seg" role="radiogroup" aria-label="Richtung">
+      <input type="radio" name="dir" id="d-to" value="toHome" checked><label for="d-to">Nach Hause</label>
+      <input type="radio" name="dir" id="d-from" value="fromHome"><label for="d-from">Von zu Hause</label>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="place">
+      <input type="text" id="place" placeholder="Ort, z. B. Zürich HB" required
+             autocomplete="off" role="combobox" aria-expanded="false" aria-controls="sugg">
+      <ul id="sugg" class="sugg" role="listbox"></ul>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="seg" role="radiogroup" aria-label="Zeitbezug">
+      <input type="radio" name="ref" id="r-dep" value="depart" checked><label for="r-dep">Ab</label>
+      <input type="radio" name="ref" id="r-arr" value="arrive"><label for="r-arr">An</label>
+    </div>
+    <input type="date" id="date" required>
+    <input type="time" id="time" required>
+    <button type="submit">Suchen</button>
+  </div>
+
+  <div class="row">
+    <label class="check"><input type="checkbox" id="walk" checked> Verbindungen mit zusätzlichem Fussweg zeigen</label>
+  </div>
+</form>
+
+<p id="status" role="status"></p>
+<ol id="results"></ol>
+</main>
+
+<script>
+/*
+ * Compares connections over all stops near home, incl. walking time.
+ *
+ *   Home ──walk──► Stop A ──transit──► Place
+ *        ──walk──► Stop B ──transit──►
+ *        ──walk──► ...
+ *
+ * Layers (each calls only the one below):
+ *   UI ──► Planner (adds walking, merges, sorts) ──► TransportApi (HTTP)
+ *   UI ──► Stations (recent + favorites) ──► localStorage
+ */
+
+// ---------- Config ----------
+
+// Walk minutes from home to each stop. Names as known by the SBB timetable.
+const HOME_STOPS = Object.freeze([
+  { name: "Wallisellen, Furtbach", walkMin: 2 },
+  { name: "Wallisellen, Ifang", walkMin: 6 },
+  { name: "Wallisellen, Glatt", walkMin: 14 },
+  { name: "Dietlikon", walkMin: 15 },
+  { name: "Wallisellen", walkMin: 15 },
+]);
+
+const Direction = Object.freeze({ TO_HOME: "toHome", FROM_HOME: "fromHome" });
+const TimeRef = Object.freeze({ DEPART: "depart", ARRIVE: "arrive" });
+const LegKind = Object.freeze({ RIDE: "ride", WALK: "walk", CHANGE: "change" });
+const TRANSFER_WALK_MAX_MIN = 5;
+const WalkMode = Object.freeze({ SHOW: "show", HIDE: "hide" });
+
+const API_BASE = "https://transport.opendata.ch/v1";
+const CONNECTIONS_PER_STOP = 4;
+const MAX_RESULTS = 10;
+const MS_PER_MIN = 60_000;
+const MS_PER_SEC = 1_000;
+
+const MIN_QUERY_CHARS = 3;
+const MAX_SUGGESTIONS = 6;
+const MAX_RECENT = 5;
+const DEBOUNCE_MS = 250;
+const STORAGE_KEY = "homeapprox.stations";
+
+// ---------- TransportApi: raw HTTP, nothing else knows the API shape ----------
+
+const TransportApi = (() => {
+  const pad = (n) => String(n).padStart(2, "0");
+  const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const fmtTime = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+  // Transfer = arrival of a vehicle section followed by another one.
+  // E.g. S8 ──► Oerlikon ──► S19: one transfer at Oerlikon.
+  function toTransfers(sections) {
+    const rides = (sections || []).filter((s) => s.journey);
+    return rides.slice(0, -1).map((s) => ({
+      stop: s.arrival.station.name,
+      at: new Date(s.arrival.arrivalTimestamp * MS_PER_SEC),
+    }));
+  }
+
+  // Short walks are platform changes, not real walking.
+  function walkKind(sec) {
+    return sec < TRANSFER_WALK_MAX_MIN * 60 ? LegKind.CHANGE : LegKind.WALK;
+  }
+
+  // One section as a leg: ride (with line), real walk, or short change walk.
+  function toLeg(s) {
+    const j = s.journey;
+    const dep = new Date(s.departure.departureTimestamp * MS_PER_SEC);
+    const arr = new Date(s.arrival.arrivalTimestamp * MS_PER_SEC);
+    const walkSec = s.walk?.duration ?? Math.round((arr - dep) / MS_PER_SEC);
+    return {
+      kind: j ? LegKind.RIDE : walkKind(walkSec),
+      line: j ? `${j.category || ""} ${j.number || ""}`.trim() : "",
+      headsign: j?.to || "",
+      from: s.departure.station.name,
+      dep,
+      platform: s.departure.platform || "",
+      to: s.arrival.station.name,
+      arr,
+      walkSec,
+    };
+  }
+
+  // Maps API connection to a plain trip: { from, to, dep, arr, lines, transfers, legs }.
+  function toTrip(c) {
+    return {
+      from: c.from.station.name,
+      to: c.to.station.name,
+      dep: new Date(c.from.departureTimestamp * MS_PER_SEC),
+      arr: new Date(c.to.arrivalTimestamp * MS_PER_SEC),
+      lines: (c.products || []).join(", "),
+      transfers: toTransfers(c.sections),
+      legs: (c.sections || []).map(toLeg),
+    };
+  }
+
+  // Station names matching a prefix, for the search help.
+  async function locations(query) {
+    const params = new URLSearchParams({ query, type: "station" });
+    const res = await fetch(`${API_BASE}/locations?${params}`);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    return (data.stations || []).map((s) => s.name).filter(Boolean);
+  }
+
+  async function connections(from, to, at, timeRef) {
+    const params = new URLSearchParams({
+      from,
+      to,
+      date: fmtDate(at),
+      time: fmtTime(at),
+      isArrivalTime: timeRef === TimeRef.ARRIVE ? "1" : "0",
+      limit: String(CONNECTIONS_PER_STOP),
+    });
+
+    const res = await fetch(`${API_BASE}/connections?${params}`);
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status}`);
+    }
+
+    const data = await res.json();
+    return (data.connections || []).map(toTrip);
+  }
+
+  return { connections, locations };
+})();
+
+// ---------- Planner: domain logic, adds walking around the transit leg ----------
+
+const Planner = (() => {
+  const shift = (d, min) => new Date(d.getTime() + min * MS_PER_MIN);
+
+  // Time to ask the API for, so that walking is already accounted for.
+  // E.g. leave home 08:00, walk 15 → train must depart from 08:15.
+  function queryTime(at, dir, timeRef, walkMin) {
+    if (dir === Direction.FROM_HOME && timeRef === TimeRef.DEPART) {
+      return shift(at, walkMin);
+    }
+    if (dir === Direction.TO_HOME && timeRef === TimeRef.ARRIVE) {
+      return shift(at, -walkMin);
+    }
+    return at;
+  }
+
+  // Full door-to-door journey for one trip. `query` records what was asked
+  // of the API, so odd results can be traced.
+  function toJourney(trip, stop, dir, query) {
+    const toHome = dir === Direction.TO_HOME;
+    return {
+      stop: toHome ? trip.to : trip.from,
+      walkMin: stop.walkMin,
+      walkFirst: !toHome,
+      start: toHome ? trip.dep : shift(trip.dep, -stop.walkMin),
+      end: toHome ? shift(trip.arr, stop.walkMin) : trip.arr,
+      transitStart: trip.dep,
+      transitEnd: trip.arr,
+      lines: trip.lines,
+      transfers: trip.transfers,
+      legs: trip.legs,
+      hasExtraWalk: trip.legs.some((l) => l.kind === LegKind.WALK),
+      query,
+    };
+  }
+
+  // The walk at the home end is ours (HOME_STOPS). If the API adds its own
+  // there, it reached a different stop than asked: drop the trip.
+  //   fromHome: [walk?] ride ... ride [walk]   ← first leg must not be a walk
+  //   toHome:   [walk] ride ... ride [walk?]   ← last leg must not be a walk
+  function homeEndIsClean(trip, dir) {
+    const legs = trip.legs;
+    if (!legs.length) {
+      return true;
+    }
+    const homeLeg = dir === Direction.FROM_HOME ? legs[0] : legs[legs.length - 1];
+    return homeLeg.kind === LegKind.RIDE;
+  }
+
+  async function forStop(stop, place, at, dir, timeRef) {
+    const t = queryTime(at, dir, timeRef, stop.walkMin);
+    const [from, to] = dir === Direction.TO_HOME ? [place, stop.name] : [stop.name, place];
+    const trips = await TransportApi.connections(from, to, t, timeRef);
+    const query = { from, to, at: t, timeRef };
+    return trips
+      .filter((trip) => homeEndIsClean(trip, dir))
+      .map((trip) => toJourney(trip, stop, dir, query));
+  }
+
+  // Queries all stops in parallel; one failing stop doesn't block the others.
+  async function plan(place, at, dir, timeRef, walkMode) {
+    const settled = await Promise.allSettled(
+      HOME_STOPS.map((s) => forStop(s, place, at, dir, timeRef))
+    );
+
+    const failed = [];
+    let journeys = [];
+    settled.forEach((r, i) => {
+      if (r.status === "rejected") {
+        failed.push(HOME_STOPS[i].name);
+        return;
+      }
+      journeys = journeys.concat(r.value);
+    });
+
+    // Keep journeys within the requested window, ordered by departure.
+    const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
+    journeys = journeys.filter(fits).sort((a, b) => a.start - b.start);
+
+    if (walkMode === WalkMode.HIDE) {
+      journeys = journeys.filter((j) => !j.hasExtraWalk);
+    }
+
+    return { journeys: journeys.slice(0, MAX_RESULTS), failed };
+  }
+
+  // Suggestions for the place field: favorites and recent first, then API hits.
+  async function suggest(query, known) {
+    const q = query.toLowerCase();
+    const local = known.filter((n) => n.toLowerCase().includes(q));
+    if (query.length < MIN_QUERY_CHARS) {
+      return local;
+    }
+
+    const remote = await TransportApi.locations(query);
+    const fresh = remote.filter((n) => !local.includes(n));
+    return local.concat(fresh).slice(0, MAX_SUGGESTIONS);
+  }
+
+  return { plan, suggest };
+})();
+
+// ---------- Stations: recent + favorites, persisted in localStorage ----------
+
+const Stations = (() => {
+  const load = () => {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || { recent: [], favorites: [] };
+    } catch {
+      return { recent: [], favorites: [] };
+    }
+  };
+  const save = (s) => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(s));
+    } catch {
+      // Storage unavailable (private mode): keep working without memory.
+    }
+  };
+
+  // Most recently used first, capped; favorites are never dropped from recent.
+  function touch(name) {
+    const s = load();
+    s.recent = [name, ...s.recent.filter((n) => n !== name)].slice(0, MAX_RECENT);
+    save(s);
+  }
+
+  function toggleFavorite(name) {
+    const s = load();
+    const isFav = s.favorites.includes(name);
+    s.favorites = isFav ? s.favorites.filter((n) => n !== name) : [...s.favorites, name];
+    save(s);
+    return !isFav;
+  }
+
+  const isFavorite = (name) => load().favorites.includes(name);
+  const favorites = () => load().favorites;
+  const recent = () => load().recent.filter((n) => !isFavorite(n));
+
+  return { touch, toggleFavorite, isFavorite, favorites, recent };
+})();
+
+// ---------- UI ----------
+
+const $ = (id) => document.getElementById(id);
+const hhmm = (d) => d.toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit", hour12: false });
+const minutes = (a, b) => Math.round((b - a) / MS_PER_MIN);
+
+function initInputs() {
+  const now = new Date();
+  $("date").valueAsDate = new Date(now.getTime() - now.getTimezoneOffset() * MS_PER_MIN);
+  $("time").value = hhmm(now);
+}
+
+// Positions a bar segment on the shared time axis [t0, t1].
+function segment(cls, from, to, t0, t1) {
+  const span = document.createElement("span");
+  const total = t1 - t0 || 1;
+  span.className = cls;
+  span.style.left = `${((from - t0) / total) * 100}%`;
+  span.style.width = `${((to - from) / total) * 100}%`;
+  return span;
+}
+
+function renderJourney(j, t0, t1) {
+  const li = document.createElement("li");
+
+  const times = document.createElement("div");
+  times.className = "times";
+  times.textContent = `${hhmm(j.start)} – ${hhmm(j.end)}`;
+  const dur = document.createElement("span");
+  dur.className = "dur";
+  dur.textContent = `${minutes(j.start, j.end)} Min.`;
+  times.append(dur);
+
+  const bar = document.createElement("div");
+  bar.className = "bar";
+  bar.setAttribute("aria-hidden", "true");
+  // Home walk, a wait track under the whole transit span (fills gaps between
+  // legs), each API leg on top (ride = solid, walk = dotted, change = wait),
+  // then transfer dots.
+  const walkFrom = j.walkFirst ? j.start : j.transitEnd;
+  const walkTo = j.walkFirst ? j.transitStart : j.end;
+  const LEG_CLASS = { [LegKind.RIDE]: "transit", [LegKind.WALK]: "walk", [LegKind.CHANGE]: "wait" };
+  bar.append(
+    segment("walk", walkFrom, walkTo, t0, t1),
+    segment("wait", j.transitStart, j.transitEnd, t0, t1),
+    ...(j.legs.length
+      ? j.legs.map((l) => segment(LEG_CLASS[l.kind], l.dep, l.arr, t0, t1))
+      : [segment("transit", j.transitStart, j.transitEnd, t0, t1)]),
+    ...j.transfers.map((x) => segment("xfer", x.at, x.at, t0, t1))
+  );
+
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  const n = j.transfers.length;
+  const changes = n === 0 ? "direkt" : `${n}× umsteigen`;
+  const extra = j.hasExtraWalk ? ", + Fussweg" : "";
+  meta.textContent = `${j.stop}, ${j.walkMin} Min. zu Fuss. ${j.lines}, ${changes}${extra}`;
+
+  li.append(times, bar, meta);
+
+  if (n > 0) {
+    const xfer = document.createElement("div");
+    xfer.className = "meta";
+    xfer.textContent = `Umsteigen: ${j.transfers.map((x) => `${x.stop} ${hhmm(x.at)}`).join(", ")}`;
+    li.append(xfer);
+  }
+
+  // Click toggles the leg-by-leg detail.
+  const details = renderDetails(j);
+  details.hidden = true;
+  li.append(details);
+  li.classList.add("clickable");
+  li.addEventListener("click", () => {
+    details.hidden = !details.hidden;
+  });
+
+  return li;
+}
+
+// Leg table plus the API query, so a strange result can be traced back.
+function renderDetails(j) {
+  const box = document.createElement("div");
+  box.className = "details";
+
+  const legs = document.createElement("ul");
+  j.legs.forEach((l) => {
+    const li = document.createElement("li");
+    const min = Math.round(l.walkSec / 60);
+    const HEAD = {
+      [LegKind.RIDE]: `${l.line} → ${l.headsign}`,
+      [LegKind.WALK]: `Fussweg ${min} Min.`,
+      [LegKind.CHANGE]: `Umsteigen zu Fuss ${min} Min.`,
+    };
+    const head = HEAD[l.kind];
+    const gleis = l.platform ? ` Gleis ${l.platform}` : "";
+    li.textContent = `${head}: ${hhmm(l.dep)} ${l.from}${gleis} → ${hhmm(l.arr)} ${l.to}`;
+    legs.append(li);
+  });
+
+  const q = document.createElement("div");
+  q.className = "meta";
+  const ref = j.query.timeRef === TimeRef.ARRIVE ? "an" : "ab";
+  q.textContent = `Abfrage: ${j.query.from} → ${j.query.to}, ${ref} ${hhmm(j.query.at)}`;
+
+  box.append(legs, q);
+  return box;
+}
+
+// ---------- Place suggestions ----------
+
+function suggestionItem(name) {
+  const li = document.createElement("li");
+  li.setAttribute("role", "option");
+
+  const label = document.createElement("span");
+  label.className = "name";
+  label.textContent = name;
+
+  const star = document.createElement("button");
+  star.type = "button";
+  star.className = Stations.isFavorite(name) ? "star on" : "star";
+  star.textContent = "★";
+  star.setAttribute("aria-label", "Favorit");
+  star.addEventListener("click", (e) => {
+    e.stopPropagation();
+    star.classList.toggle("on", Stations.toggleFavorite(name));
+  });
+
+  li.append(label, star);
+  li.addEventListener("click", () => {
+    $("place").value = name;
+    closeSuggestions();
+  });
+  return li;
+}
+
+function groupItem(text) {
+  const li = document.createElement("li");
+  li.className = "group";
+  li.textContent = text;
+  return li;
+}
+
+function closeSuggestions() {
+  $("sugg").replaceChildren();
+  $("place").setAttribute("aria-expanded", "false");
+}
+
+function showSuggestions(names, grouped) {
+  const list = $("sugg");
+  list.replaceChildren();
+
+  if (grouped) {
+    const favs = Stations.favorites();
+    const recent = Stations.recent();
+    if (favs.length) {
+      list.append(groupItem("Favoriten"), ...favs.map(suggestionItem));
+    }
+    if (recent.length) {
+      list.append(groupItem("Zuletzt"), ...recent.map(suggestionItem));
+    }
+  } else {
+    list.append(...names.map(suggestionItem));
+  }
+
+  $("place").setAttribute("aria-expanded", list.children.length ? "true" : "false");
+}
+
+let suggestTimer = null;
+let suggestSeq = 0;
+
+// Empty field: favorites + recent. Otherwise: debounced lookup, stale replies dropped.
+function onPlaceInput() {
+  clearTimeout(suggestTimer);
+  const query = $("place").value.trim();
+  const seq = ++suggestSeq;
+
+  if (!query) {
+    showSuggestions([], true);
+    return;
+  }
+
+  suggestTimer = setTimeout(async () => {
+    const known = [...Stations.favorites(), ...Stations.recent()];
+    try {
+      const names = await Planner.suggest(query, known);
+      if (seq === suggestSeq) {
+        showSuggestions(names, false);
+      }
+    } catch {
+      closeSuggestions();
+    }
+  }, DEBOUNCE_MS);
+}
+
+function render({ journeys, failed }) {
+  const list = $("results");
+  list.replaceChildren();
+
+  const status = $("status");
+  status.className = failed.length ? "error" : "";
+  status.textContent = failed.length ? `Keine Daten für: ${failed.join(", ")}` : "";
+
+  if (!journeys.length) {
+    status.textContent ||= "Keine Verbindungen gefunden. Ort oder Zeit anpassen.";
+    return;
+  }
+
+  const t0 = Math.min(...journeys.map((j) => j.start));
+  const t1 = Math.max(...journeys.map((j) => j.end));
+  journeys.forEach((j) => list.append(renderJourney(j, t0, t1)));
+}
+
+async function onSubmit(e) {
+  e.preventDefault();
+
+  const place = $("place").value.trim();
+  if (!place) {
+    return;
+  }
+
+  closeSuggestions();
+  Stations.touch(place);
+
+  const at = new Date(`${$("date").value}T${$("time").value}`);
+  const dir = document.querySelector("input[name=dir]:checked").value;
+  const timeRef = document.querySelector("input[name=ref]:checked").value;
+  const walkMode = $("walk").checked ? WalkMode.SHOW : WalkMode.HIDE;
+
+  $("status").className = "";
+  $("status").textContent = "Suche …";
+  $("results").replaceChildren();
+
+  try {
+    render(await Planner.plan(place, at, dir, timeRef, walkMode));
+  } catch (err) {
+    $("status").className = "error";
+    $("status").textContent = `Fehler: ${err.message}`;
+  }
+}
+
+initInputs();
+$("form").addEventListener("submit", onSubmit);
+$("place").addEventListener("input", onPlaceInput);
+$("place").addEventListener("focus", onPlaceInput);
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".place")) {
+    closeSuggestions();
+  }
+});
+</script>
+</body>
+</html>
