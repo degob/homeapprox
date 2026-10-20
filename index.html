@@ -201,7 +201,7 @@ const WalkMode = Object.freeze({ SHOW: "show", HIDE: "hide" });
 const API_BASE = "https://transport.opendata.ch/v1";
 const CONNECTIONS_PER_STOP = 4;
 const MAX_RESULTS = 10;
-const STOP_ABBR_MAX = 5;
+const STOP_ABBR_MAX = 6;
 const MS_PER_MIN = 60_000;
 const MS_PER_SEC = 1_000;
 
@@ -421,19 +421,22 @@ const Planner = (() => {
       : { town: name.slice(0, space), rest: name.slice(space + 1) };
   }
 
-  // Abbreviation for the transfer bubble, max STOP_ABBR_MAX letters.
-  // Route within one town: town dropped ("Zürich HB" → "HB").
-  // Otherwise town initial + rest ("Zürich HB" → "ZHB", "Zürich Oerlikon" → "ZOerl").
-  // Stop that is only a town: the town itself, shortened ("Wallisellen" → "Walli").
-  function stopAbbr(name, routeStart, routeEnd) {
+  // Abbreviation for the transfer bubble, max STOP_ABBR_MAX letters:
+  // town initial + rest, the word "Bahnhof" dropped. A stop that is only a town
+  // (also after dropping "Bahnhof") is the town itself, shortened.
+  //   "Zürich Oerlikon"         → "ZOerli"
+  //   "Zürich HB"               → "ZHB"
+  //   "Zürich, Bahnhofplatz/HB" → "ZBahnh"
+  //   "Wallisellen, Bahnhof"    → "Wallis"
+  function stopAbbr(name) {
     const letters = (t) => t.replace(/[^\p{L}\p{N}]/gu, "");
     const { town, rest } = splitTown(name);
-    if (!rest) {
+    const core = rest.replace(/(^|[\s,])Bahnhof(?=$|[\s,])/gi, " ").trim();
+    if (!core) {
       return letters(town).slice(0, STOP_ABBR_MAX);
     }
-    const sameTown = splitTown(routeStart).town === splitTown(routeEnd).town;
-    const prefix = sameTown ? "" : letters(town).slice(0, 1);
-    return prefix + letters(rest).slice(0, STOP_ABBR_MAX - prefix.length);
+    const prefix = letters(town).slice(0, 1);
+    return prefix + letters(core).slice(0, STOP_ABBR_MAX - prefix.length);
   }
 
   // Suggestions for the place field: favorites and recent first, then API hits.
@@ -573,8 +576,6 @@ function renderJourney(j, t0, t1) {
     }
     return l.kind === LegKind.WALK ? segment("walk", l.dep, l.arr, t0, t1) : null;
   };
-  const routeStart = j.legs[0]?.from || j.query.from;
-  const routeEnd = j.legs[j.legs.length - 1]?.to || j.query.to;
   bar.classList.toggle("pinned", j.transfers.length > 0);
   bar.append(
     segment("walk", walkFrom, walkTo, t0, t1),
@@ -584,7 +585,7 @@ function renderJourney(j, t0, t1) {
       ? j.legs.map(legSeg).filter(Boolean)
       : [labelled("transit", j.transitStart, j.transitEnd, t0, t1, [j.lines], j.lines)]),
     ...j.transfers.map((x) =>
-      transferPin(x, Planner.stopAbbr(x.stop, routeStart, routeEnd), t0, t1)
+      transferPin(x, Planner.stopAbbr(x.stop), t0, t1)
     )
   );
 
@@ -791,7 +792,15 @@ async function onSubmit(e) {
 initInputs();
 $("form").addEventListener("submit", onSubmit);
 $("place").addEventListener("input", onPlaceInput);
-$("place").addEventListener("focus", onPlaceInput);
+// Tap on the field: favorites + recent, not hits for the current text.
+// Text is selected, so typing replaces it.
+function onPlaceFocus() {
+  clearTimeout(suggestTimer);
+  ++suggestSeq;
+  showSuggestions([], true);
+  $("place").select();
+}
+$("place").addEventListener("focus", onPlaceFocus);
 $("walk").addEventListener("change", render);
 let resizeTimer = null;
 window.addEventListener("resize", () => {
