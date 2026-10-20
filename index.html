@@ -84,16 +84,30 @@ li.clickable { cursor: pointer; }
 .details li { padding: .15rem 0; border: 0; }
 
 /* Timeline: walk = dotted green, transit = solid blue, shared time axis. */
-.bar { position: relative; height: 10px; margin: .4rem 0; }
-.bar span { position: absolute; top: 0; height: 100%; border-radius: 5px; }
-.bar .walk { background: repeating-linear-gradient(90deg, var(--walk) 0 4px, transparent 4px 7px); top: 3px; height: 4px; }
+.bar { position: relative; height: 18px; margin: .4rem 0; }
+.bar span { position: absolute; top: 0; height: 100%; border-radius: 4px; }
+.bar .walk { background: repeating-linear-gradient(90deg, var(--walk) 0 4px, transparent 4px 7px); top: 7px; height: 4px; }
 .bar .transit { background: var(--transit); }
 /* Wait / platform change: thin muted track, visible only where no leg covers it. */
-.bar .wait { background: var(--line); top: 3px; height: 4px; }
-/* Transfer marker: small dot on the transit bar. */
-.bar .xfer {
-  width: 6px; height: 6px; top: 2px; margin-left: -3px;
-  background: var(--bg); border: 1px solid var(--surface); border-radius: 50%;
+.bar .wait { background: var(--line); top: 7px; height: 4px; }
+/* Transfer: gray block over the gap between two rides. */
+.bar .xfer { background: var(--line); border-radius: 0; }
+/* Labels inside bar segments; fitLabels() picks the longest text that fits. */
+.bar .lbl {
+  overflow: hidden; white-space: nowrap; text-align: center;
+  font-size: .72rem; font-weight: 700; line-height: 18px;
+}
+.bar .transit.lbl { color: var(--bg); }
+/* Transfer stop: speech bubble above the bar, tip at the gap's middle. */
+.bar.pinned { margin-top: 1.5rem; }
+.bar .pin {
+  top: auto; bottom: calc(100% + 5px); height: auto; transform: translateX(-50%);
+  padding: 0 .3rem; border-radius: 4px; white-space: nowrap;
+  font-size: .72rem; line-height: 1.4; background: var(--muted); color: var(--bg);
+}
+.bar .pin::after {
+  content: ""; position: absolute; left: 50%; top: 100%; margin-left: -4px;
+  border: 4px solid transparent; border-top-color: var(--muted);
 }
 
 /* Place field with suggestion dropdown. */
@@ -187,6 +201,7 @@ const WalkMode = Object.freeze({ SHOW: "show", HIDE: "hide" });
 const API_BASE = "https://transport.opendata.ch/v1";
 const CONNECTIONS_PER_STOP = 4;
 const MAX_RESULTS = 10;
+const STOP_ABBR_MAX = 5;
 const MS_PER_MIN = 60_000;
 const MS_PER_SEC = 1_000;
 
@@ -203,13 +218,29 @@ const TransportApi = (() => {
   const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const fmtTime = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
-  // Transfer = arrival of a vehicle section followed by another one.
-  // E.g. S8 ──► Oerlikon ──► S19: one transfer at Oerlikon.
-  function toTransfers(sections) {
-    const rides = (sections || []).filter((s) => s.journey);
-    return rides.slice(0, -1).map((s) => ({
-      stop: s.arrival.station.name,
-      at: new Date(s.arrival.arrivalTimestamp * MS_PER_SEC),
+  // Display name of a line. API gives category + number, e.g. T/15, S/19, B/759.
+  // Trams get "T15", buses just the number, trains "S19", "IR36".
+  function lineLabel(j) {
+    const cat = (j.category || "").trim();
+    const num = (j.number || "").trim();
+    if (!num) {
+      return cat;
+    }
+    if (cat === "B" || cat === "BUS" || num.startsWith(cat)) {
+      return num;
+    }
+    return `${cat}${num}`;
+  }
+
+  // Transfer = gap between two consecutive rides; named after the stop where
+  // the next ride is boarded. E.g. T15 ──► Bahnhofplatz/HB ┄► Zürich HB ──► S19:
+  // one transfer, "Zürich HB", from T15 arrival to S19 departure.
+  function toTransfers(legs) {
+    const rides = legs.filter((l) => l.kind === LegKind.RIDE);
+    return rides.slice(0, -1).map((r, i) => ({
+      stop: rides[i + 1].from,
+      from: r.arr,
+      to: rides[i + 1].dep,
     }));
   }
 
@@ -226,7 +257,7 @@ const TransportApi = (() => {
     const walkSec = s.walk?.duration ?? Math.round((arr - dep) / MS_PER_SEC);
     return {
       kind: j ? LegKind.RIDE : walkKind(walkSec),
-      line: j ? `${j.category || ""} ${j.number || ""}`.trim() : "",
+      line: j ? lineLabel(j) : "",
       headsign: j?.to || "",
       from: s.departure.station.name,
       dep,
@@ -239,14 +270,16 @@ const TransportApi = (() => {
 
   // Maps API connection to a plain trip: { from, to, dep, arr, lines, transfers, legs }.
   function toTrip(c) {
+    const legs = (c.sections || []).map(toLeg);
+    const rideLines = [...new Set(legs.filter((l) => l.kind === LegKind.RIDE).map((l) => l.line))];
     return {
       from: c.from.station.name,
       to: c.to.station.name,
       dep: new Date(c.from.departureTimestamp * MS_PER_SEC),
       arr: new Date(c.to.arrivalTimestamp * MS_PER_SEC),
-      lines: (c.products || []).join(", "),
-      transfers: toTransfers(c.sections),
-      legs: (c.sections || []).map(toLeg),
+      lines: (rideLines.length ? rideLines : c.products || []).join(", "),
+      transfers: toTransfers(legs),
+      legs,
     };
   }
 
@@ -345,7 +378,7 @@ const Planner = (() => {
   }
 
   // Queries all stops in parallel; one failing stop doesn't block the others.
-  async function plan(place, at, dir, timeRef, walkMode) {
+  async function plan(place, at, dir, timeRef) {
     const settled = await Promise.allSettled(
       HOME_STOPS.map((s) => forStop(s, place, at, dir, timeRef))
     );
@@ -364,11 +397,43 @@ const Planner = (() => {
     const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
     journeys = journeys.filter(fits).sort((a, b) => a.start - b.start);
 
-    if (walkMode === WalkMode.HIDE) {
-      journeys = journeys.filter((j) => !j.hasExtraWalk);
-    }
+    return { journeys, failed };
+  }
 
-    return { journeys: journeys.slice(0, MAX_RESULTS), failed };
+  // Applied on already fetched journeys, so toggling needs no new search.
+  function visible(journeys, walkMode) {
+    const shown = walkMode === WalkMode.HIDE ? journeys.filter((j) => !j.hasExtraWalk) : journeys;
+    return shown.slice(0, MAX_RESULTS);
+  }
+
+  // Town part of a stop name: before the comma, else the first word.
+  //   "Zürich, Bahnhofplatz/HB" → Zürich / Bahnhofplatz/HB
+  //   "Zürich HB"               → Zürich / HB
+  //   "Wallisellen"             → Wallisellen / (empty)
+  function splitTown(name) {
+    const comma = name.indexOf(", ");
+    if (comma >= 0) {
+      return { town: name.slice(0, comma), rest: name.slice(comma + 2) };
+    }
+    const space = name.indexOf(" ");
+    return space < 0
+      ? { town: name, rest: "" }
+      : { town: name.slice(0, space), rest: name.slice(space + 1) };
+  }
+
+  // Abbreviation for the transfer bubble, max STOP_ABBR_MAX letters.
+  // Route within one town: town dropped ("Zürich HB" → "HB").
+  // Otherwise town initial + rest ("Zürich HB" → "ZHB", "Zürich Oerlikon" → "ZOerl").
+  // Stop that is only a town: the town itself, shortened ("Wallisellen" → "Walli").
+  function stopAbbr(name, routeStart, routeEnd) {
+    const letters = (t) => t.replace(/[^\p{L}\p{N}]/gu, "");
+    const { town, rest } = splitTown(name);
+    if (!rest) {
+      return letters(town).slice(0, STOP_ABBR_MAX);
+    }
+    const sameTown = splitTown(routeStart).town === splitTown(routeEnd).town;
+    const prefix = sameTown ? "" : letters(town).slice(0, 1);
+    return prefix + letters(rest).slice(0, STOP_ABBR_MAX - prefix.length);
   }
 
   // Suggestions for the place field: favorites and recent first, then API hits.
@@ -384,7 +449,7 @@ const Planner = (() => {
     return local.concat(fresh).slice(0, MAX_SUGGESTIONS);
   }
 
-  return { plan, suggest };
+  return { plan, visible, suggest, stopAbbr };
 })();
 
 // ---------- Stations: recent + favorites, persisted in localStorage ----------
@@ -449,6 +514,40 @@ function segment(cls, from, to, t0, t1) {
   return span;
 }
 
+// Segment with text candidates (longest first); fitLabels() picks one.
+function labelled(cls, from, to, t0, t1, texts, title) {
+  const span = segment(`${cls} lbl`, from, to, t0, t1);
+  span.dataset.texts = JSON.stringify(texts);
+  span.title = title;
+  return span;
+}
+
+// Bubble above the bar, pointing at the middle of the transfer gap.
+function transferPin(x, abbr, t0, t1) {
+  const pin = document.createElement("span");
+  const mid = (x.from.getTime() + x.to.getTime()) / 2;
+  pin.className = "pin";
+  pin.style.left = `${((mid - t0) / (t1 - t0 || 1)) * 100}%`;
+  pin.textContent = abbr;
+  pin.title = x.stop;
+  return pin;
+}
+
+// Must run once the bar is laid out: first text that fits, else none.
+function fitLabels(root) {
+  root.querySelectorAll(".lbl").forEach((el) => {
+    const texts = JSON.parse(el.dataset.texts || "[]");
+    el.textContent = "";
+    for (const t of texts) {
+      el.textContent = t;
+      if (el.scrollWidth <= el.clientWidth) {
+        return;
+      }
+    }
+    el.textContent = "";
+  });
+}
+
 function renderJourney(j, t0, t1) {
   const li = document.createElement("li");
 
@@ -463,34 +562,43 @@ function renderJourney(j, t0, t1) {
   const bar = document.createElement("div");
   bar.className = "bar";
   bar.setAttribute("aria-hidden", "true");
-  // Home walk, a wait track under the whole transit span (fills gaps between
-  // legs), each API leg on top (ride = solid, walk = dotted, change = wait),
-  // then transfer dots.
+  // Home walk, a wait track under the whole transit span, gray transfer blocks,
+  // then each API leg (ride = solid blue with line, walk = dotted; short change
+  // walks are covered by the transfer block), then a bubble per transfer stop.
   const walkFrom = j.walkFirst ? j.start : j.transitEnd;
   const walkTo = j.walkFirst ? j.transitStart : j.end;
-  const LEG_CLASS = { [LegKind.RIDE]: "transit", [LegKind.WALK]: "walk", [LegKind.CHANGE]: "wait" };
+  const legSeg = (l) => {
+    if (l.kind === LegKind.RIDE) {
+      return labelled("transit", l.dep, l.arr, t0, t1, [l.line], `${l.line} → ${l.headsign}`);
+    }
+    return l.kind === LegKind.WALK ? segment("walk", l.dep, l.arr, t0, t1) : null;
+  };
+  const routeStart = j.legs[0]?.from || j.query.from;
+  const routeEnd = j.legs[j.legs.length - 1]?.to || j.query.to;
+  bar.classList.toggle("pinned", j.transfers.length > 0);
   bar.append(
     segment("walk", walkFrom, walkTo, t0, t1),
     segment("wait", j.transitStart, j.transitEnd, t0, t1),
+    ...j.transfers.map((x) => segment("xfer", x.from, x.to, t0, t1)),
     ...(j.legs.length
-      ? j.legs.map((l) => segment(LEG_CLASS[l.kind], l.dep, l.arr, t0, t1))
-      : [segment("transit", j.transitStart, j.transitEnd, t0, t1)]),
-    ...j.transfers.map((x) => segment("xfer", x.at, x.at, t0, t1))
+      ? j.legs.map(legSeg).filter(Boolean)
+      : [labelled("transit", j.transitStart, j.transitEnd, t0, t1, [j.lines], j.lines)]),
+    ...j.transfers.map((x) =>
+      transferPin(x, Planner.stopAbbr(x.stop, routeStart, routeEnd), t0, t1)
+    )
   );
 
   const meta = document.createElement("div");
   meta.className = "meta";
-  const n = j.transfers.length;
-  const changes = n === 0 ? "direkt" : `${n}× umsteigen`;
-  const extra = j.hasExtraWalk ? ", + Fussweg" : "";
-  meta.textContent = `${j.stop}, ${j.walkMin} Min. zu Fuss. ${j.lines}, ${changes}${extra}`;
+  const extra = j.hasExtraWalk ? " · + Fussweg" : "";
+  meta.textContent = `${j.stop} · ${j.lines}${extra}`;
 
   li.append(times, bar, meta);
 
-  if (n > 0) {
+  if (j.transfers.length) {
     const xfer = document.createElement("div");
     xfer.className = "meta";
-    xfer.textContent = `Umsteigen: ${j.transfers.map((x) => `${x.stop} ${hhmm(x.at)}`).join(", ")}`;
+    xfer.textContent = `Umsteigen: ${j.transfers.map((x) => x.stop).join(", ")}`;
     li.append(xfer);
   }
 
@@ -622,9 +730,20 @@ function onPlaceInput() {
   }, DEBOUNCE_MS);
 }
 
-function render({ journeys, failed }) {
+// Last search result; the walk toggle filters it without searching again.
+let lastResult = null;
+
+const walkMode = () => ($("walk").checked ? WalkMode.SHOW : WalkMode.HIDE);
+
+function render() {
   const list = $("results");
   list.replaceChildren();
+  if (!lastResult) {
+    return;
+  }
+
+  const { failed } = lastResult;
+  const journeys = Planner.visible(lastResult.journeys, walkMode());
 
   const status = $("status");
   status.className = failed.length ? "error" : "";
@@ -638,6 +757,7 @@ function render({ journeys, failed }) {
   const t0 = Math.min(...journeys.map((j) => j.start));
   const t1 = Math.max(...journeys.map((j) => j.end));
   journeys.forEach((j) => list.append(renderJourney(j, t0, t1)));
+  fitLabels(list);
 }
 
 async function onSubmit(e) {
@@ -654,14 +774,14 @@ async function onSubmit(e) {
   const at = new Date(`${$("date").value}T${$("time").value}`);
   const dir = document.querySelector("input[name=dir]:checked").value;
   const timeRef = document.querySelector("input[name=ref]:checked").value;
-  const walkMode = $("walk").checked ? WalkMode.SHOW : WalkMode.HIDE;
-
   $("status").className = "";
   $("status").textContent = "Suche …";
   $("results").replaceChildren();
+  lastResult = null;
 
   try {
-    render(await Planner.plan(place, at, dir, timeRef, walkMode));
+    lastResult = await Planner.plan(place, at, dir, timeRef);
+    render();
   } catch (err) {
     $("status").className = "error";
     $("status").textContent = `Fehler: ${err.message}`;
@@ -672,6 +792,12 @@ initInputs();
 $("form").addEventListener("submit", onSubmit);
 $("place").addEventListener("input", onPlaceInput);
 $("place").addEventListener("focus", onPlaceInput);
+$("walk").addEventListener("change", render);
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => fitLabels($("results")), DEBOUNCE_MS);
+});
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".place")) {
     closeSuggestions();

@@ -179,3 +179,36 @@ Erledigt:
 Offene Punkte:
 - `sections`-Format und `/locations`-Antwort gegen API prüfen.
 - Deploy auf GitHub Pages.
+
+---
+
+## User
+
+Tram-Linien mit T präfixen. Liniennummer auf blauen Streifen. Im grauen Umsteige-Balken Haltestellenname (oder Abkürzung). Erste Zeile ohne Gehzeit und ohne Anzahl Umstiege. Zweite Zeile «Umsteigen» nur Haltestellen, ohne Uhrzeit. Toggle filtert die vorhandenen Ergebnisse statt neu zu suchen.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Linienname aus `journey.category` + `number` (API: Tram `T`/`15`, Bus `B`/`759`, `products` enthält nur `15`): Tram `T15`, Zug `S19`, Bus nur Nummer.
+- Balken 18 px. Blau mit Linie, grauer Block über der Umsteige-Lücke mit Haltestelle (Einstieg nächste Fahrt). Text: voller Name → ohne Ortsteil («Zürich, Bahnhofplatz/HB» → «Bahnhofplatz/HB», «Zürich HB» → «HB») → eindeutige Abkürzung über alle angezeigten Ergebnisse («Oerl.»). Passt nichts, kein Text. Tooltip = voller Name.
+- Lange Fusswege in der Lücke bleiben grün; Label im grössten freien Stück.
+- Zeile 1: «Haltestelle · Linien · + Fussweg». Zeile 2: «Umsteigen: A, B».
+- Toggle filtert das letzte Resultat lokal (`Planner.visible`), Limit 10 nach Filter.
+
+---
+
+## User
+
+Umsteige-Name nicht im grauen Block, sondern als Sprechblase. Abkürzung: Start und Ende der Route im selben Ort → Ort weglassen, sonst erster Buchstabe des Orts + Abkürzung des Rests. Max. 5 Buchstaben.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Sprechblase über dem Balken, Spitze in der Mitte der Umsteige-Lücke, Tooltip = voller Name. Grauer Block bleibt, ohne Text.
+- `Planner.stopAbbr`: Ort = vor Komma, sonst erstes Wort. Route-Start/-Ende = erster/letzter Abschnitt.
+  - gleicher Ort: «Zürich HB» → «HB», «Zürich Oerlikon» → «Oerli»
+  - anderer Ort: «Zürich HB» → «ZHB», «Wallisellen, Bahnhof» → «WBahn»
+  - nur Ort: «Wallisellen» → «Walli»
+- Keine Kollisionsprüfung, Blasen können sich bei nahen Umstiegen überlappen.
