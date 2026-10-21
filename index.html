@@ -53,7 +53,7 @@ body {
   font: 17px/1.5 "Atkinson Hyperlegible", system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
 }
-main { max-width: 42rem; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+main { max-width: 42rem; margin: 0 auto; padding: 1.5rem .75rem 3rem; }
 h1 { font-size: 1.6rem; margin: 0 0 1.25rem; }
 
 form { display: grid; gap: .9rem; }
@@ -119,14 +119,31 @@ li.clickable { cursor: pointer; }
 .alt-row.planned .t { font-weight: 700; }
 .alt-row.planned .bar.mini { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
 .alts .legend { font-size: .78rem; color: var(--muted); margin-top: .3rem; }
-.details ul { list-style: none; padding: 0; margin: 0 0 .4rem; }
-.details li { padding: .15rem 0; border: 0; }
+/* Leg table: time | on | line | direction | off | time. */
+.legs { width: 100%; border-collapse: collapse; font-size: .85rem; margin: 0 0 .4rem; }
+.legs td { padding: .3rem .25rem; vertical-align: top; border-bottom: 1px solid var(--line); }
+.legs tr:last-child td { border-bottom: 0; }
+.legs .tm { white-space: nowrap; font-weight: 700; width: 2.8rem; }
+.legs .tm.end { text-align: right; }
+.legs .stop { overflow-wrap: anywhere; }
+.legs .gl { display: block; color: var(--muted); font-size: .75rem; }
+.legs .ln { white-space: nowrap; width: 2.6rem; }
+.legs .ln b {
+  display: inline-block; min-width: 2.2rem; text-align: center; border-radius: 4px;
+  padding: 0 .2rem; background: var(--transit); color: var(--bg); font-size: .8rem;
+}
+.legs tr.walk .ln b, .legs tr.change .ln b { background: none; color: var(--walk); border: 1px dashed var(--walk); }
+.legs tr.change .ln b { color: var(--muted); border-color: var(--muted); }
+.legs .dir { color: var(--muted); width: 3.6rem; cursor: pointer; overflow-wrap: anywhere; }
+.legs .dir.open { color: var(--ink); }
 
 /* Timeline: walk = dotted green, transit = solid blue, shared time axis. */
 /* Track scrolls horizontally when zoomed; all tracks scroll together.
    touch-action keeps native pans but leaves pinch to our zoom handler. */
 .track {
-  overflow-x: auto; overflow-y: hidden; margin: .4rem 0; padding-top: 1.5rem;
+  overflow-x: auto; overflow-y: hidden; padding-top: 1.5rem;
+  /* Bleed to the card edges: bars get nearly the full card width. */
+  margin: .4rem calc(6px - .9rem); padding-inline: 0;
   scrollbar-width: none; touch-action: pan-x pan-y;
 }
 .track::-webkit-scrollbar { display: none; }
@@ -238,9 +255,15 @@ li.clickable { cursor: pointer; }
 const HOME_STOPS = Object.freeze([
   { name: "Wallisellen, Furtbach", walkMin: 2 },
   { name: "Wallisellen, Ifang", walkMin: 6 },
-  { name: "Wallisellen, Glatt", walkMin: 14 },
+  // Glatt has two stops: tram (T12) preferred, bus stop only where its
+  // vehicle isn't covered by another connection (secondary).
+  { name: "Wallisellen, Glatt (Tram)", walkMin: 13 },
+  { name: "Wallisellen, Glatt (Bus)", walkMin: 14, secondary: true },
   { name: "Dietlikon", walkMin: 15 },
   { name: "Wallisellen", walkMin: 15 },
+  // secondary: only kept if its first vehicle (bus 774) isn't already in
+  // another connection, see dropCoveredSecondary().
+  { name: "Wallisellen, Säntisstrasse", walkMin: 8, secondary: true },
 ]);
 
 // Feeder lines: the API often replaces a short bus/tram ride from a home stop
@@ -258,11 +281,11 @@ const FEEDERS = Object.freeze([
     alight: "Dietlikon, Bahnhof Ost", hub: "Dietlikon", changeMin: 4 },
   { stop: "Wallisellen, Ifang", board: "Wallisellen, Ifang", lines: ["787"], mode: "bus",
     alight: "Zürich Oerlikon, Bahnhof Ost", hub: "Zürich Oerlikon", changeMin: 5 },
-  { stop: "Wallisellen, Glatt", board: "Wallisellen, Glatt (Bus)", lines: ["787"], mode: "bus",
+  { stop: "Wallisellen, Glatt (Bus)", board: "Wallisellen, Glatt (Bus)", lines: ["787"], mode: "bus",
     alight: "Zürich Oerlikon, Bahnhof Ost", hub: "Zürich Oerlikon", changeMin: 5 },
-  { stop: "Wallisellen, Glatt", board: "Wallisellen, Glatt (Bus)", lines: ["61"], mode: "bus",
+  { stop: "Wallisellen, Glatt (Bus)", board: "Wallisellen, Glatt (Bus)", lines: ["61"], mode: "bus",
     alight: "Zürich Oerlikon, Bahnhof", hub: "Zürich Oerlikon", changeMin: 5 },
-  { stop: "Wallisellen, Glatt", board: "Wallisellen, Glatt (Tram)", lines: ["12"], mode: "tram",
+  { stop: "Wallisellen, Glatt (Tram)", board: "Wallisellen, Glatt (Tram)", lines: ["12"], mode: "tram",
     alight: "Stettbach, Bahnhof", hub: "Stettbach", changeMin: 4 },
 ]);
 const BOARD_LIMIT = 80;
@@ -273,8 +296,8 @@ const MAX_PAGES = 4;
 const ALT_BEFORE_MIN = 20; // alternatives at a transfer: from arrival − this
 const ALT_LIMIT = 6;
 const BOARD_LOOKBACK_MIN = 60; // board window before the first hub train (arrive mode)
-const FEEDER_ARRIVE_SLACK_MIN = 25;
-const FEEDER_MAX_WAIT_MIN = 20; // longer wait at the hub: feeder makes no sense // rough feeder ride + change, toHome + arrive
+const FEEDER_ARRIVE_SLACK_MIN = 25; // rough feeder ride + change, toHome + arrive
+const FEEDER_MAX_WAIT_MIN = 20; // longer wait at the hub: feeder makes no sense
 
 const Direction = Object.freeze({ TO_HOME: "toHome", FROM_HOME: "fromHome" });
 const TimeRef = Object.freeze({ DEPART: "depart", ARRIVE: "arrive" });
@@ -349,6 +372,8 @@ const TransportApi = (() => {
       to: s.arrival.station.name,
       arr,
       walkSec,
+      tripId: j?.name || "",
+      stops: (j?.passList || []).map((p) => p.station?.name).filter(Boolean),
     };
   }
 
@@ -448,6 +473,8 @@ const TransportApi = (() => {
           to: target,
           arr: new Date(stopAt.arrivalTimestamp * MS_PER_SEC),
           walkSec: 0,
+          tripId: e.name || "",
+          stops: (e.passList || []).map((p) => p.station?.name).filter(Boolean),
         };
       })
       .filter(Boolean);
@@ -518,6 +545,7 @@ const Planner = (() => {
       from: trip.from,
       to: trip.to,
       walkMin: stop.walkMin,
+      homeStop: stop.name,
       walkFirst: !toHome,
       start: toHome ? trip.dep : shift(trip.dep, -stop.walkMin),
       end: toHome ? shift(trip.arr, stop.walkMin) : trip.arr,
@@ -558,12 +586,20 @@ const Planner = (() => {
   // (toHome). Matched so the change at the hub takes at least changeMin.
   //   fromHome: latest ride with arr + change ≤ hub dep
   //   toHome:   earliest ride with dep ≥ hub arr + change
+  // Hub trip that rides the feeder line again or passes the feeder's own stop
+  // goes back the way we came: nonsense. E.g. T12 Glatt → Stettbach, then
+  // T12 Stettbach → Flughafen through Glatt again.
+  function backtracks(hubTrip, f) {
+    return hubTrip.legs.some((l) => l.kind === LegKind.RIDE &&
+      (f.lines.includes(l.line.replace(/^T/, "")) || f.lines.includes(l.line) || l.stops.includes(f.board)));
+  }
+
   function joinFeeder(hubTrip, rides, f, dir) {
     const fromHome = dir === Direction.FROM_HOME;
     const ride = fromHome
       ? rides.filter((r) => shift(r.arr, f.changeMin) <= hubTrip.dep).sort((a, b) => b.arr - a.arr)[0]
       : rides.filter((r) => r.dep >= shift(hubTrip.arr, f.changeMin)).sort((a, b) => a.dep - b.dep)[0];
-    if (!ride) {
+    if (!ride || backtracks(hubTrip, f)) {
       return null;
     }
     const wait = fromHome ? minutesBetween(ride.arr, hubTrip.dep) : minutesBetween(hubTrip.arr, ride.dep);
@@ -624,6 +660,62 @@ const Planner = (() => {
       .map((trip) => toJourney(trip, stop, dir, query));
   }
 
+  // Vehicle identity: API trip name (same bus at another stop has another time).
+  const vehicleKey = (l) => `${l.line}#${l.tripId || l.dep.getTime()}`;
+
+  // Home-end ride: first ride from home, last ride to home.
+  const homeRide = (j, dir) => {
+    const rides = j.legs.filter((l) => l.kind === LegKind.RIDE);
+    return dir === Direction.FROM_HOME ? rides[0] : rides[rides.length - 1];
+  };
+
+  // A secondary stop's journey is dropped if its home-end vehicle already
+  // appears in any journey of the other stops.
+  function dropCoveredSecondary(journeys, dir) {
+    const secondary = new Set(HOME_STOPS.filter((s) => s.secondary).map((s) => s.name));
+    const isSecondary = (j) => secondary.has(j.homeStop);
+    const used = new Set(
+      journeys.filter((j) => !isSecondary(j)).flatMap((j) =>
+        j.legs.filter((l) => l.kind === LegKind.RIDE).map(vehicleKey))
+    );
+    return journeys.filter((j) => {
+      if (!isSecondary(j)) {
+        return true;
+      }
+      const ride = homeRide(j, dir);
+      return !ride || !used.has(vehicleKey(ride));
+    });
+  }
+
+  // Same home-end vehicle, same far end: only the best stop to board it is
+  // kept. E.g. T12 from Glatt (Tram) 09:55 (walk 13) vs. Wallisellen Bahnhof
+  // 09:56 (walk 15), both arriving 10:13: leaving home 09:42 beats 09:41.
+  //   fromHome: same vehicle + same arrival → latest start wins
+  //   toHome:   same vehicle + same departure → earliest end wins
+  // Ties stay (both shown).
+  function dropDominatedBoarding(journeys, dir) {
+    const fromHome = dir === Direction.FROM_HOME;
+    const groups = new Map();
+    journeys.forEach((j) => {
+      const ride = homeRide(j, dir);
+      if (!ride) {
+        return;
+      }
+      const key = `${vehicleKey(ride)}|${(fromHome ? j.end : j.start).getTime()}`;
+      groups.set(key, [...(groups.get(key) || []), j]);
+    });
+    const drop = new Set();
+    groups.forEach((g) => {
+      const best = fromHome ? Math.max(...g.map((j) => j.start)) : Math.min(...g.map((j) => j.end));
+      g.forEach((j) => {
+        if ((fromHome ? j.start.getTime() : j.end.getTime()) !== best) {
+          drop.add(j);
+        }
+      });
+    });
+    return journeys.filter((j) => !drop.has(j));
+  }
+
   // Same rides at the same times = same journey (API result and feeder build
   // can coincide); the first one wins.
   function dedupe(journeys) {
@@ -661,7 +753,9 @@ const Planner = (() => {
       }
       journeys = journeys.concat(r.value);
     });
-    journeys = dedupe(journeys);
+    // Secondary check first: a covered secondary stop must not win the
+    // dominance comparison against the primary stop it duplicates.
+    journeys = dropDominatedBoarding(dropCoveredSecondary(dedupe(journeys), dir), dir);
 
     // Keep journeys within the requested window, ordered by departure.
     const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
@@ -965,20 +1059,9 @@ function renderDetails(j) {
   const box = document.createElement("div");
   box.className = "details";
 
-  const legs = document.createElement("ul");
-  j.legs.forEach((l) => {
-    const li = document.createElement("li");
-    const min = Math.round(l.walkSec / 60);
-    const HEAD = {
-      [LegKind.RIDE]: `${l.line} → ${l.headsign}`,
-      [LegKind.WALK]: `Fussweg ${min} Min.`,
-      [LegKind.CHANGE]: `Umsteigen zu Fuss ${min} Min.`,
-    };
-    const head = HEAD[l.kind];
-    const gleis = l.platform ? ` Gleis ${l.platform}` : "";
-    li.textContent = `${head}: ${hhmm(l.dep)} ${l.from}${gleis} → ${hhmm(l.arr)} ${l.to}`;
-    legs.append(li);
-  });
+  const legs = document.createElement("table");
+  legs.className = "legs";
+  legRows(j).forEach((r) => legs.append(legRow(r)));
 
   const q = document.createElement("div");
   q.className = "meta";
@@ -991,6 +1074,61 @@ function renderDetails(j) {
   j.transfers.forEach((x) => box.append(altButton(j, x)));
   box.append(q);
   return box;
+}
+
+// Rows of the leg table, incl. our own home walk at the home end.
+function legRows(j) {
+  const homeWalk = {
+    kind: LegKind.WALK,
+    walkMin: j.walkMin,
+    from: j.walkFirst ? "Zuhause" : j.stop,
+    to: j.walkFirst ? j.stop : "Zuhause",
+    dep: j.walkFirst ? j.start : j.transitEnd,
+    arr: j.walkFirst ? j.transitStart : j.end,
+  };
+  const api = j.legs.map((l) => ({ ...l, walkMin: Math.round(l.walkSec / 60) }));
+  return j.walkFirst ? [homeWalk, ...api] : [...api, homeWalk];
+}
+
+function cell(cls, text) {
+  const td = document.createElement("td");
+  td.className = cls;
+  td.textContent = text;
+  return td;
+}
+
+// One leg: rides show line + shortened direction (tap for full name);
+// walks show "Fuss"/"Umst." and the minutes.
+function legRow(l) {
+  const tr = document.createElement("tr");
+  tr.className = l.kind;
+  const ride = l.kind === LegKind.RIDE;
+
+  const from = cell("stop", l.from);
+  if (ride && l.platform) {
+    const gl = document.createElement("span");
+    gl.className = "gl";
+    gl.textContent = `Gleis/Kante ${l.platform}`;
+    from.append(gl);
+  }
+
+  const ln = document.createElement("td");
+  ln.className = "ln";
+  const badge = document.createElement("b");
+  badge.textContent = ride ? l.line : l.kind === LegKind.WALK ? "Fuss" : "Umst.";
+  ln.append(badge);
+
+  const dir = cell("dir", ride ? `→ ${Planner.stopAbbr(l.headsign)}` : `${l.walkMin} Min.`);
+  if (ride) {
+    dir.title = l.headsign;
+    dir.addEventListener("click", () => {
+      const open = dir.classList.toggle("open");
+      dir.textContent = `→ ${open ? l.headsign : Planner.stopAbbr(l.headsign)}`;
+    });
+  }
+
+  tr.append(cell("tm", hhmm(l.dep)), from, ln, dir, cell("stop", l.to), cell("tm end", hhmm(l.arr)));
+  return tr;
 }
 
 // Button per transfer; loads and toggles the alternatives below it.

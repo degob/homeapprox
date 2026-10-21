@@ -300,3 +300,74 @@ Verbindungen als Karten. Oben Zusammenfassung schnellste/langsamste Dauer. Dauer
 - Details: Button «Alternativen ab <Haltestelle>» pro Umsteigen. `Planner.alternatives`: `/connections` ab Umsteigeort zum letzten Bahnhof, ab Ankunft − 20 Min., 6 Stück. Mini-Zeitachsen; gestrichelt = geplante Ankunft am Umsteigeort; blass = fährt vorher (nur bei Verspätung); umrandet = geplant; rechts Ankunftsdifferenz am Ziel.
 - Zubringer verworfen, wenn Wartezeit am Hub > 20 Min. (`FEEDER_MAX_WAIT_MIN`).
 - Offen: Blasen können sich bei kurzen Abschnitten überdecken.
+
+---
+
+## User
+
+Bei Reisen mit vielen Verbindungen kommen nur die nächsten 20 Minuten. Immer mindestens 30 Minuten zeigen.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- `connectionsCovering`: pro Haltestelle/Hub nachfragen (ab letzter Abfahrt + 1 Min. bzw. erster Ankunft − 1 Min.), bis `MIN_WINDOW_MIN = 30` abgedeckt ist, max. `MAX_PAGES = 4` Abfragen. 6 statt 4 Verbindungen pro Abfrage.
+- `visible`: alle Verbindungen im 30-Min.-Fenster werden gezeigt (ohne Limit), danach bis `MAX_RESULTS` aufgefüllt. Bei «An»: die spätesten vor dem Fenster.
+- Kosten: bei dichtem Takt bis ~4× mehr Abfragen.
+
+---
+
+## User
+
+Zusätzliche Haltestelle «Wallisellen, Säntisstrasse» (8 Min.), nur wenn nicht schon durch andere abgedeckt (z. B. gleicher erster Bus). Balken breiter.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- HOME_STOPS + Säntisstrasse (`secondary: true`). `dropCoveredSecondary`: Verbindung verworfen, wenn ihr Fahrzeug am Heim-Ende (erstes bzw. letztes) in einer Verbindung der anderen Haltestellen vorkommt. Fahrzeug = Linie + API-Fahrtnummer (`journey.name`), sonst Linie + Abfahrtszeit.
+- Säntisstrasse hat nur Bus 774 (30-Min.-Takt, Richtung Schulhaus Bürgli); kein Zubringer konfiguriert.
+- Balken: Track reicht bis fast an den Kartenrand, Seitenrand der Seite 0.75 rem.
+
+---
+
+## User
+
+Details als Tabelle (Zeit, Einstieg, Linie, Richtung gekürzt/antippbar, Ausstieg, Zeit), Fusswege als eigene Zeilen. Frage: Flughafen – warum T12 ab Wallisellen Bhf statt ab Glatt?
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Details-Tabelle `legRows`/`legRow`: inkl. eigenem Heimweg («Zuhause»), Fussweg-Badge grün gestrichelt, Umsteige-Fussweg grau. Richtung via `stopAbbr`, Tippen zeigt vollen Namen. Gleis/Kante unter Einstieg.
+
+Analyse Glatt/T12 (API, 21.10. 09:40):
+- «Wallisellen, Glatt» wird als «Glatt (Bus)» aufgelöst. Die T12-Verbindung beginnt mit Fussweg 4 Min. zu «Glatt (Tram)» → von `homeEndIsClean` verworfen.
+- T12 Glatt (Tram) 09:55 → Wallisellen, Bahnhof 09:56 (1 Min.). Mit 14 vs. 15 Min. Gehzeit identische Abgangszeit zu Hause; Glatt nur besser, wenn Gehzeit zu Glatt (Tram) kürzer ist.
+
+---
+
+## User
+
+Richtige Glatt-Haltestelle verwenden, Trams bevorzugen. Gehzeit Glatt (Tram) 13 Min.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- HOME_STOPS: «Wallisellen, Glatt (Tram)» 13 Min.; «Wallisellen, Glatt (Bus)» 14 Min. als `secondary` (nur wenn Fahrzeug nicht schon abgedeckt). Zubringer 787/61 an Glatt (Bus), T12 an Glatt (Tram).
+- `dropDominatedBoarding`: gleiches Fahrzeug am Heim-Ende + gleiche Ankunft (von zu Hause) bzw. gleiche Abfahrt (nach Hause) → nur die Haltestelle mit spätestem Losgehen bzw. frühester Ankunft zu Hause bleibt. Gleichstand: beide.
+  Beispiel: T12 ab Glatt (Tram) 09:55, los 09:42, schlägt T12 ab Wallisellen Bhf 09:56, los 09:41.
+
+---
+
+## User
+
+Unsinn: T12 nach Stettbach und dort dieselbe T12 zurück Richtung Flughafen.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- `backtracks()`: Zubringer-Kombination verworfen, wenn die Hub-Verbindung die Zubringer-Linie erneut fährt oder (laut `passList`) an der Zubringer-Haltestelle vorbeifährt.
+- Legs speichern `stops` aus `journey.passList` bzw. Stationboard-`passList`.
