@@ -94,6 +94,17 @@ li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
 }
 #summary { display: flex; flex-wrap: wrap; gap: .4rem 1rem; align-items: center; margin: 0 0 .75rem; color: var(--muted); }
 #summary:empty { display: none; }
+button.more {
+  display: block; width: 100%; margin: .75rem 0; background: var(--surface);
+  color: var(--transit); border: 1px solid var(--line);
+}
+button.more:disabled { opacity: .6; cursor: default; }
+/* Left already (up to RECENT_PAST_MIN before the asked time): run? */
+#results > li.past { border-style: dashed; }
+.past-tag {
+  font-size: .8rem; font-weight: 700; color: var(--bad); border: 1px solid currentColor;
+  border-radius: 999px; padding: 0 .45rem;
+}
 #summary .item { display: flex; align-items: center; gap: .4rem; }
 .meta { color: var(--muted); font-size: .95rem; }
 li.clickable { cursor: pointer; }
@@ -252,7 +263,9 @@ li.clickable { cursor: pointer; }
 
 <p id="status" role="status"></p>
 <div id="summary"></div>
+<button type="button" id="earlier" class="more" hidden>Frühere Verbindungen</button>
 <ol id="results"></ol>
+<button type="button" id="later" class="more" hidden>Spätere Verbindungen</button>
 </main>
 
 <script>
@@ -311,6 +324,10 @@ const BOARD_LIMIT = 80;
 // Results always cover at least this window after (Ab) / before (An) the
 // asked time; stop queries page on until they do.
 const MIN_WINDOW_MIN = 30;
+// Ab: also connections that left up to this long ago (worth running?).
+const RECENT_PAST_MIN = 5;
+// "Frühere / Spätere Verbindungen" widen the window by this much.
+const MORE_STEP_MIN = 30;
 const MAX_PAGES = 4;
 const ALT_BEFORE_MIN = 20; // alternatives at a transfer: earlier ones from arrival − this
 const ALT_LIMIT = 6;
@@ -758,6 +775,20 @@ const Planner = (() => {
   }
 
   // Queries all stops and feeders in parallel; one failing doesn't block the others.
+  // Duplicates, covered secondary stops, dominated boardings; sorted.
+  // Secondary check first: a covered secondary stop must not win the
+  // dominance comparison against the primary stop it duplicates.
+  function prune(journeys, dir) {
+    const once = dedupe(journeys);
+    const pruned = dir === Direction.OTHER ? once : dropDominatedBoarding(dropCoveredSecondary(once, dir), dir);
+    return pruned.sort((a, b) => a.start - b.start);
+  }
+
+  // Window shown by visible(): Ab [at, at + 30], An [at − 30, at].
+  const defaultRange = (at, timeRef) => timeRef === TimeRef.DEPART
+    ? { lo: at, hi: shift(at, MIN_WINDOW_MIN) }
+    : { lo: shift(at, -MIN_WINDOW_MIN), hi: at };
+
   // Anderer Ort: one pair, walks anywhere are the API's and stay.
   async function planOther(origin, place, at, timeRef) {
     const trips = await connectionsCovering(origin, place, at, timeRef);
@@ -767,7 +798,7 @@ const Planner = (() => {
     const journeys = dedupe(trips.map((t) => toJourney(t, stop, Direction.OTHER, query)))
       .filter(fits)
       .sort((a, b) => a.start - b.start);
-    return { journeys, failed: [], at, timeRef };
+    return { journeys, failed: [], at, timeRef, ...defaultRange(at, timeRef) };
   }
 
   // `origin` only for Direction.OTHER.
@@ -793,29 +824,27 @@ const Planner = (() => {
       }
       journeys = journeys.concat(r.value);
     });
-    // Secondary check first: a covered secondary stop must not win the
-    // dominance comparison against the primary stop it duplicates.
-    journeys = dropDominatedBoarding(dropCoveredSecondary(dedupe(journeys), dir), dir);
+    journeys = prune(journeys, dir);
 
     // Keep journeys within the requested window, ordered by departure.
     const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
     journeys = journeys.filter(fits).sort((a, b) => a.start - b.start);
 
-    return { journeys, failed, at, timeRef };
+    return { journeys, failed, at, timeRef, ...defaultRange(at, timeRef) };
   }
 
   // Applied on already fetched journeys, so toggling needs no new search.
   // Everything inside the MIN_WINDOW_MIN window is shown, however many;
   // beyond it, filled up to MAX_RESULTS.
   function visible(result, walkMode) {
-    const { journeys, at, timeRef } = result;
+    const { journeys, timeRef, lo, hi } = result;
     const shown = walkMode === WalkMode.HIDE ? journeys.filter((j) => !j.hasExtraWalk) : journeys;
     const inWindow = timeRef === TimeRef.DEPART
-      ? (j) => j.start <= shift(at, MIN_WINDOW_MIN)
-      : (j) => j.end >= shift(at, -MIN_WINDOW_MIN);
+      ? (j) => j.start >= lo && j.start <= hi
+      : (j) => j.end >= lo && j.end <= hi;
     const core = shown.filter(inWindow);
     const room = Math.max(0, MAX_RESULTS - core.length);
-    const outside = shown.filter((j) => !inWindow(j));
+    const outside = shown.filter((j) => (timeRef === TimeRef.DEPART ? j.start > hi : j.end < lo));
     // Ab: next ones after the window; An: the latest ones before it.
     const rest = timeRef === TimeRef.DEPART ? outside.slice(0, room) : outside.slice(-room || outside.length);
     if (!room) {
@@ -924,7 +953,42 @@ const Planner = (() => {
     return { dir: Direction.OTHER, origin: x.stop, place: j.query.to, at: x.from, timeRef: TimeRef.DEPART };
   }
 
-  return { plan, visible, suggest, stopAbbr, alternatives, followUpSearch };
+  // Entry point of the form. Ab also fetches what left up to
+  // RECENT_PAST_MIN ago; `at` stays the asked time (for the "vor N Min." tag).
+  async function search(place, at, dir, timeRef, origin) {
+    const lookback = timeRef === TimeRef.DEPART ? RECENT_PAST_MIN : 0;
+    const r = await plan(place, shift(at, -lookback), dir, timeRef, origin);
+    const hi = timeRef === TimeRef.DEPART ? shift(at, MIN_WINDOW_MIN) : r.hi;
+    return { ...r, at, hi, params: { place, dir, timeRef, origin } };
+  }
+
+  // "Frühere" / "Spätere": fetch the next MORE_STEP_MIN outside the window,
+  // merge, widen the window.
+  //   Ab: earlier = depart from lo − step; later = depart from hi
+  //   An: earlier = arrive by lo;          later = arrive by hi + step
+  async function extend(result, side) {
+    const { place, dir, timeRef, origin } = result.params;
+    const earlier = side === "earlier";
+    const depart = timeRef === TimeRef.DEPART;
+    const lo = earlier ? shift(result.lo, -MORE_STEP_MIN) : result.lo;
+    const hi = earlier ? result.hi : shift(result.hi, MORE_STEP_MIN);
+    let q;
+    if (depart) {
+      q = earlier ? lo : result.hi;
+    } else {
+      q = earlier ? result.lo : hi;
+    }
+    const more = await plan(place, q, dir, timeRef, origin);
+    return {
+      ...result,
+      journeys: prune([...result.journeys, ...more.journeys], dir),
+      failed: [...new Set([...result.failed, ...more.failed])],
+      lo,
+      hi,
+    };
+  }
+
+  return { plan, search, extend, visible, suggest, stopAbbr, alternatives, followUpSearch };
 })();
 
 // ---------- Stations: recent + favorites, persisted in localStorage ----------
@@ -1055,7 +1119,7 @@ function fitLabels(root) {
   fitPins(root);
 }
 
-function renderJourney(j, t0, t1, scale) {
+function renderJourney(j, t0, t1, scale, past) {
   const li = document.createElement("li");
   li.dataset.startFrac = String((j.start - t0) / (t1 - t0 || 1));
 
@@ -1067,6 +1131,13 @@ function renderJourney(j, t0, t1, scale) {
   const durMin = minutes(j.start, j.end);
   dur.textContent = `${durMin} Min.`;
   dur.style.background = durColor(durMin, scale.best, scale.worst);
+  if (past) {
+    const tag = document.createElement("span");
+    tag.className = "past-tag";
+    tag.textContent = past;
+    tag.title = "Schon losgegangen: lohnt es sich zu rennen?";
+    times.append(tag);
+  }
   times.append(dur);
 
   const track = document.createElement("div");
@@ -1476,10 +1547,26 @@ let lastResult = null;
 
 const walkMode = () => ($("walk").checked ? WalkMode.SHOW : WalkMode.HIDE);
 
+// "vor 3 Min." if the asked time is now, else "3 Min. früher"; null if not past.
+function pastLabel(j) {
+  const r = lastResult;
+  if (!r || r.timeRef !== TimeRef.DEPART || j.start >= r.at) {
+    return null;
+  }
+  const n = minutes(j.start, r.at);
+  if (n > RECENT_PAST_MIN) {
+    return null; // fetched with "Frühere": just earlier, not a run candidate
+  }
+  const asked = Math.abs(Date.now() - r.at) < 2 * MS_PER_MIN;
+  return asked ? `vor ${n} Min.` : `${n} Min. früher`;
+}
+
 function render() {
   const list = $("results");
   list.replaceChildren();
   $("summary").replaceChildren();
+  $("earlier").hidden = !lastResult;
+  $("later").hidden = !lastResult;
   if (!lastResult) {
     return;
   }
@@ -1500,7 +1587,11 @@ function render() {
   const t0 = Math.min(...journeys.map((j) => j.start));
   const t1 = Math.max(...journeys.map((j) => j.end));
   const scale = durationScale(journeys);
-  journeys.forEach((j) => list.append(renderJourney(j, t0, t1, scale)));
+  journeys.forEach((j) => {
+    const li = renderJourney(j, t0, t1, scale, pastLabel(j));
+    li.classList.toggle("past", Boolean(pastLabel(j)));
+    list.append(li);
+  });
   Timeline.restore(list);
   fitLabels(list);
 }
@@ -1673,12 +1764,11 @@ async function onSubmit(e) {
   const timeRef = document.querySelector("input[name=ref]:checked").value;
   $("status").className = "";
   $("status").textContent = "Suche …";
-  $("results").replaceChildren();
-  $("summary").replaceChildren();
   lastResult = null;
+  render();
 
   try {
-    lastResult = await Planner.plan(place, at, dir, timeRef, origin);
+    lastResult = await Planner.search(place, at, dir, timeRef, origin);
     render();
   } catch (err) {
     $("status").className = "error";
@@ -1709,8 +1799,31 @@ function startSearch({ dir, origin, place, at, timeRef }) {
   $("form").requestSubmit();
 }
 
+// Frühere / Spätere: widen the current result, keep the list in place.
+async function onMore(side) {
+  const btn = $(side);
+  if (!lastResult || btn.disabled) {
+    return;
+  }
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Lädt …";
+  try {
+    lastResult = await Planner.extend(lastResult, side);
+    render();
+  } catch (err) {
+    $("status").className = "error";
+    $("status").textContent = `Fehler: ${err.message}`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
+
 initInputs();
 Timeline.init();
+$("earlier").addEventListener("click", () => onMore("earlier"));
+$("later").addEventListener("click", () => onMore("later"));
 placeFields.forEach((f) => f.init());
 document.querySelectorAll("input[name=dir]").forEach((r) => r.addEventListener("change", onDirChange));
 $("form").addEventListener("submit", onSubmit);

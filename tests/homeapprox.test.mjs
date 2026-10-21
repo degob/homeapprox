@@ -630,3 +630,60 @@ describe("Neue Suche ab Umsteigeort", () => {
     assert.deepEqual({ ...s, at: hm(new Date(s.at)) }, { dir: "other", origin: "Zürich HB", place: "Bern", at: "08:30", timeRef: "depart" });
   });
 });
+
+// ---------- Recently left, earlier / later ----------
+
+describe("recently left and more connections", () => {
+  // Wallisellen trains every 10 min; query time decides which come back.
+  const every10 = (p) => {
+    const [h, m] = p.get("time").split(":").map(Number);
+    const first = Math.ceil((h * 60 + m) / 10) * 10;
+    return [0, 10, 20, 30, 40, 50].map((k) => {
+      const t = first + k;
+      const dep = [Math.floor(t / 60), t % 60];
+      return conn(ride("S", "8", "Wallisellen", dep, "Zürich HB", [Math.floor((t + 12) / 60), (t + 12) % 60], { trip: `s8-${t}` }));
+    });
+  };
+
+  test("Ab: connections that left up to 5 min ago are included", async () => {
+    const app = loadApp();
+    connectionsFor(app, { "Wallisellen→Zürich HB": every10 });
+    // Asked 08:08 → also the 08:05 home departure (train 08:20, 3 min ago),
+    // not 07:55 (13 min ago).
+    const r = await app.Planner.search("Zürich HB", at(8, 8), "fromHome", "depart");
+    const starts = app.Planner.visible(r, "show").map((j) => hm(j.start));
+    assert.equal(starts[0], "08:05");
+    assert.ok(!starts.includes("07:55"));
+    assert.equal(hm(r.at), "08:08"); // asked time kept for the "vor N Min." tag
+  });
+
+  test("An: no look-back", async () => {
+    const app = loadApp();
+    connectionsFor(app, { "Zürich HB→Wallisellen": [conn(ride("S", "8", "Zürich HB", [8, 0], "Wallisellen", [8, 12]))] });
+    await app.Planner.search("Zürich HB", at(9, 0), "toHome", "arrive");
+    const q = app.requests.find((r) => r.path === "connections" && r.params.get("to") === "Wallisellen");
+    assert.equal(q.params.get("time"), "08:45"); // 09:00 − 15 walk, nothing extra
+  });
+
+  test("Spätere: next 30 min are added, window widens", async () => {
+    const app = loadApp();
+    connectionsFor(app, { "Wallisellen→Zürich HB": every10 });
+    const r = await app.Planner.search("Zürich HB", at(8, 0), "fromHome", "depart");
+    const r2 = await app.Planner.extend(r, "later");
+    assert.equal(hm(r2.hi), "09:00");
+    const starts = app.Planner.visible(r2, "show").map((j) => hm(j.start));
+    assert.ok(starts.includes("08:55"));
+    assert.equal(new Set(starts).size, starts.length); // no duplicates after merge
+  });
+
+  test("Frühere: 30 min before are added", async () => {
+    const app = loadApp();
+    connectionsFor(app, { "Wallisellen→Zürich HB": every10 });
+    const r = await app.Planner.search("Zürich HB", at(8, 0), "fromHome", "depart");
+    const r2 = await app.Planner.extend(r, "earlier");
+    assert.equal(hm(r2.lo), "07:25");
+    const starts = app.Planner.visible(r2, "show").map((j) => hm(j.start));
+    assert.ok(starts.includes("07:25") && starts.includes("07:45"));
+    assert.deepEqual([...starts], [...starts].sort());
+  });
+});

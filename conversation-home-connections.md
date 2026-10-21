@@ -417,3 +417,18 @@ Zwei Buttons nebeneinander: links «Alternativen» wie bisher, rechts neue Suche
 - Vorschläge/Favoriten für beide Felder (`placeField`).
 - Fix: `[hidden]` wurde von `.row { display: flex }` überschrieben.
 - 4 neue Tests (52).
+
+---
+
+## User
+
+Alternativen zeigen nur Verbindungen in der Vergangenheit (Oerlikon → Flughafen).
+
+## Claude
+
+*(Aktualisiert `index.html`, Tests.)*
+
+- Ursache: eine Abfrage ab Ankunft − 20 Min. mit 6 Resultaten; bei dichtem Takt liegen alle vor der Ankunft, die geplante und spätere fehlen.
+- Jetzt zwei parallele Abfragen: ab Ankunft − 20 Min. (davon max. 3 vor der Ankunft) und ab Ankunft (alle bis zur geplanten Abfahrt + 3 danach, bei Bedarf eine Folgeabfrage).
+- Mini-Balken 14 px, Labels nicht mehr abgeschnitten.
+- Test für den dichten Takt (schlägt mit der alten Version fehl). 53 Tests.
