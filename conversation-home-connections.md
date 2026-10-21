@@ -371,3 +371,19 @@ Unsinn: T12 nach Stettbach und dort dieselbe T12 zurück Richtung Flughafen.
 
 - `backtracks()`: Zubringer-Kombination verworfen, wenn die Hub-Verbindung die Zubringer-Linie erneut fährt oder (laut `passList`) an der Zubringer-Haltestelle vorbeifährt.
 - Legs speichern `stops` aus `journey.passList` bzw. Stationboard-`passList`.
+
+---
+
+## User
+
+Unit-Tests für alle besprochenen Fälle.
+
+## Claude
+
+*(Neu: `tests/load-app.mjs`, `tests/homeapprox.test.mjs`, `package.json`.)*
+
+- `npm test` bzw. `node --test tests/homeapprox.test.mjs` (Node ≥ 20, keine Abhängigkeiten).
+- `load-app.mjs` lädt das `<script>` aus `index.html` in eine Node-VM mit DOM-Stub und gemocktem `fetch`; Fixtures im API-Format (`ride`, `walk`, `conn`, `boardEntry`).
+- 48 Tests: Linienlabels, Fussweg/Umsteigen, Umsteigeort, Abkürzungen, Zeitverschiebung, Fussweg am Heim-Ende, Sortierung/Fenster, Fehler pro Haltestelle, 30-Min.-Paging, Fussweg-Toggle, Zubringer (772 hin/zurück, Umsteigezeit, Wartezeit, Backtracking T12), Duplikate, Dominanz Glatt/Bahnhof, Säntisstrasse/Glatt (Bus) sekundär, Alternativen, Vorschläge, Zuletzt/Favoriten, Dauer-Farbskala.
+- Dabei gefunden und korrigiert: Sekundär-Filter lief nach dem Dominanz-Filter, dadurch konnte Säntisstrasse eine Wallisellen-Verbindung mit demselben Bus verdrängen. Jetzt Sekundär-Filter zuerst.
+- Nicht getestet: Darstellung (Balken, Blasen, Zoom, Scroll).

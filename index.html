@@ -106,11 +106,16 @@ li.clickable { cursor: pointer; }
 .alts { margin: .4rem 0 .6rem; padding: .5rem .6rem; background: var(--bg); border-radius: 8px; }
 .alts h4 { margin: 0 0 .3rem; font-size: .9rem; }
 .alts .axis { position: relative; }
-.alts .now {
-  position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--ink);
-  opacity: .5; pointer-events: none;
+/* Planned arrival at the transfer, drawn in each mini bar. */
+.alt-row .bar.mini .now {
+  top: -3px; bottom: -3px; height: auto; width: 0; border-radius: 0;
+  border-left: 2px dashed var(--ink); opacity: .5; pointer-events: none;
 }
-.alt-row { display: grid; grid-template-columns: 7.2rem 1fr 4.6rem; gap: .5rem; align-items: center; padding: .15rem 0; }
+.alt-row { display: grid; grid-template-columns: 7.2rem 1fr 4.6rem; gap: .5rem; align-items: center; padding: .15rem 0; cursor: pointer; }
+.alt-row .t::before { content: "▸ "; color: var(--muted); }
+.alt-row.open .t::before { content: "▾ "; }
+.alt-detail { margin: .1rem 0 .5rem; padding: .3rem .4rem; background: var(--surface); border-radius: 6px; }
+.alt-detail .meta { font-size: .8rem; }
 .alt-row .t { font-size: .85rem; }
 .alt-row .d { font-size: .8rem; text-align: right; color: var(--muted); }
 .alt-row .bar.mini { width: 100%; height: 12px; margin: 0; }
@@ -1162,6 +1167,24 @@ function altButton(j, x) {
   return wrap;
 }
 
+// Legs of one alternative + changes and how it compares at the destination.
+function renderAltDetail(a, j) {
+  const box = document.createElement("div");
+  box.className = "alt-detail";
+  const table = document.createElement("table");
+  table.className = "legs";
+  a.trip.legs.forEach((l) => table.append(legRow({ ...l, walkMin: Math.round(l.walkSec / 60) })));
+
+  const n = a.trip.transfers.length;
+  const changes = n === 0 ? "direkt" : `${n}× umsteigen`;
+  const delta = a.delta === 0 ? "wie geplant" : a.delta > 0 ? `${a.delta} Min. später als geplant` : `${-a.delta} Min. früher als geplant`;
+  const meta = document.createElement("div");
+  meta.className = "meta";
+  meta.textContent = `${changes} · an ${j.to} ${hhmm(a.trip.arr)}, ${delta}`;
+  box.append(table, meta);
+  return box;
+}
+
 const ALT_REL_TEXT = {
   [AltRel.EARLIER]: "falls verspätet",
   [AltRel.PLANNED]: "geplant",
@@ -1209,28 +1232,21 @@ function renderAlternatives(panel, j, x, alts) {
     const delta = a.delta === 0 ? "±0" : a.delta > 0 ? `+${a.delta}` : `−${-a.delta}`;
     d.textContent = a.rel === AltRel.PLANNED ? ALT_REL_TEXT[a.rel] : `${delta} Min.`;
     d.title = ALT_REL_TEXT[a.rel];
+    bar.append(segment("now", x.from, x.from, t0, t1));
     row.append(t, bar, d);
-    axis.append(row);
+
+    // Tap a row: its legs as table, like the connection details.
+    const detail = renderAltDetail(a, j);
+    detail.hidden = true;
+    row.addEventListener("click", () => {
+      detail.hidden = !detail.hidden;
+      row.classList.toggle("open", !detail.hidden);
+    });
+    axis.append(row, detail);
   });
 
-  // Dashed "arrival" marker spans the bar column only.
-  const now = document.createElement("span");
-  now.className = "now";
-  axis.append(now);
   panel.append(axis);
-  const placeMarker = () => {
-    const bar = axis.querySelector(".bar.mini");
-    if (!bar) {
-      return;
-    }
-    const ab = axis.getBoundingClientRect();
-    const bb = bar.getBoundingClientRect();
-    now.style.left = `${bb.left - ab.left + ((x.from - t0) / (t1 - t0 || 1)) * bb.width}px`;
-  };
-  requestAnimationFrame(() => {
-    placeMarker();
-    fitLabels(panel);
-  });
+  requestAnimationFrame(() => fitLabels(panel));
 
   const legend = document.createElement("div");
   legend.className = "legend";
