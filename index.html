@@ -46,6 +46,7 @@
   color-scheme: dark;
 }
 *, *::before, *::after { box-sizing: inherit; }
+[hidden] { display: none !important; }
 body {
   margin: 0;
   background: var(--bg);
@@ -98,8 +99,10 @@ li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
 li.clickable { cursor: pointer; }
 .check { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .95rem; }
 .details { margin-top: .5rem; padding: .5rem 0 0; border-top: 1px solid var(--line); font-size: .95rem; cursor: default; }
+.alt-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 0 .4rem; }
+.alt-btns .at { font-size: .85rem; font-weight: 700; margin-right: .2rem; }
 .details .alt-btn {
-  font-size: .85rem; font-weight: 700; padding: .3rem .7rem; margin: .3rem .4rem .3rem 0;
+  font-size: .85rem; font-weight: 700; padding: .3rem .7rem; margin: .3rem 0;
   background: var(--bg); color: var(--transit); border: 1px solid var(--line);
 }
 /* Alternatives at a transfer: mini timelines around the arrival there. */
@@ -118,8 +121,9 @@ li.clickable { cursor: pointer; }
 .alt-detail .meta { font-size: .8rem; }
 .alt-row .t { font-size: .85rem; }
 .alt-row .d { font-size: .8rem; text-align: right; color: var(--muted); }
-.alt-row .bar.mini { width: 100%; height: 12px; margin: 0; }
-.alt-row .bar.mini .walk, .alt-row .bar.mini .wait { top: 4px; height: 4px; }
+.alt-row .bar.mini { width: 100%; height: 14px; margin: 0; }
+.alt-row .bar.mini .lbl { line-height: 14px; font-size: .65rem; }
+.alt-row .bar.mini .walk, .alt-row .bar.mini .wait { top: 5px; height: 4px; }
 .alt-row.earlier { opacity: .55; }
 .alt-row.planned .t { font-weight: 700; }
 .alt-row.planned .bar.mini { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
@@ -210,6 +214,16 @@ li.clickable { cursor: pointer; }
     <div class="seg" role="radiogroup" aria-label="Richtung">
       <input type="radio" name="dir" id="d-to" value="toHome" checked><label for="d-to">Nach Hause</label>
       <input type="radio" name="dir" id="d-from" value="fromHome"><label for="d-from">Von zu Hause</label>
+      <input type="radio" name="dir" id="d-other" value="other"><label for="d-other">Anderer Ort</label>
+    </div>
+  </div>
+
+  <!-- "Von" only for Anderer Ort; "place" is the one place (home modes) or "Nach". -->
+  <div class="row" id="origin-row" hidden>
+    <div class="place">
+      <input type="text" id="origin" placeholder="Von, z. B. Zürich HB"
+             autocomplete="off" role="combobox" aria-expanded="false" aria-controls="origin-sugg">
+      <ul id="origin-sugg" class="sugg" role="listbox"></ul>
     </div>
   </div>
 
@@ -298,13 +312,16 @@ const BOARD_LIMIT = 80;
 // asked time; stop queries page on until they do.
 const MIN_WINDOW_MIN = 30;
 const MAX_PAGES = 4;
-const ALT_BEFORE_MIN = 20; // alternatives at a transfer: from arrival − this
+const ALT_BEFORE_MIN = 20; // alternatives at a transfer: earlier ones from arrival − this
 const ALT_LIMIT = 6;
+const ALT_EARLIER = 3; // shown before my arrival at the transfer
+const ALT_LATER = 3; // shown after the planned departure
 const BOARD_LOOKBACK_MIN = 60; // board window before the first hub train (arrive mode)
 const FEEDER_ARRIVE_SLACK_MIN = 25; // rough feeder ride + change, toHome + arrive
 const FEEDER_MAX_WAIT_MIN = 20; // longer wait at the hub: feeder makes no sense
 
-const Direction = Object.freeze({ TO_HOME: "toHome", FROM_HOME: "fromHome" });
+// OTHER: plain A → B search, no home stops, no feeders, no home walk.
+const Direction = Object.freeze({ TO_HOME: "toHome", FROM_HOME: "fromHome", OTHER: "other" });
 const TimeRef = Object.freeze({ DEPART: "depart", ARRIVE: "arrive" });
 const LegKind = Object.freeze({ RIDE: "ride", WALK: "walk", CHANGE: "change" });
 const TRANSFER_WALK_MAX_MIN = 5;
@@ -560,6 +577,8 @@ const Planner = (() => {
       transfers: trip.transfers,
       legs: trip.legs,
       hasExtraWalk: trip.legs.some((l) => l.kind === LegKind.WALK),
+      dir,
+      homeEnd: dir !== Direction.OTHER,
       query,
     };
   }
@@ -739,7 +758,23 @@ const Planner = (() => {
   }
 
   // Queries all stops and feeders in parallel; one failing doesn't block the others.
-  async function plan(place, at, dir, timeRef) {
+  // Anderer Ort: one pair, walks anywhere are the API's and stay.
+  async function planOther(origin, place, at, timeRef) {
+    const trips = await connectionsCovering(origin, place, at, timeRef);
+    const query = { from: origin, to: place, at, timeRef };
+    const stop = { name: origin, walkMin: 0 };
+    const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
+    const journeys = dedupe(trips.map((t) => toJourney(t, stop, Direction.OTHER, query)))
+      .filter(fits)
+      .sort((a, b) => a.start - b.start);
+    return { journeys, failed: [], at, timeRef };
+  }
+
+  // `origin` only for Direction.OTHER.
+  async function plan(place, at, dir, timeRef, origin) {
+    if (dir === Direction.OTHER) {
+      return planOther(origin, place, at, timeRef);
+    }
     const tasks = [
       ...HOME_STOPS.map((s) => ({ label: s.name, run: () => forStop(s, place, at, dir, timeRef) })),
       ...FEEDERS.map((f) => ({
@@ -840,9 +875,31 @@ const Planner = (() => {
   //   EARLIER: leaves before I arrive → only if my feeder is late
   //   PLANNED: same first ride as the proposal
   //   LATER:   fallback if I miss it
+  //
+  // Two queries, so a dense line can't fill the list with past ones only:
+  //   earlier: from arrival − ALT_BEFORE_MIN, the last ALT_EARLIER before arrival
+  //   from arrival on: all up to the planned departure + ALT_LATER after it
+  //     (one more query if the first doesn't reach that far)
   async function alternatives(j, x) {
     const dest = j.to;
-    const trips = await TransportApi.connections(x.stop, dest, shift(x.from, -ALT_BEFORE_MIN), TimeRef.DEPART, ALT_LIMIT);
+    const ask = (t) => TransportApi.connections(x.stop, dest, t, TimeRef.DEPART, ALT_LIMIT);
+    const [before, after] = await Promise.all([ask(shift(x.from, -ALT_BEFORE_MIN)), ask(x.from)]);
+    let onward = after.filter((t) => t.dep >= x.from);
+    if (onward.length && onward.filter((t) => t.dep > x.to).length < ALT_LATER) {
+      const last = new Date(Math.max(...onward.map((t) => t.dep)));
+      onward = onward.concat((await ask(shift(last, 1))).filter((t) => t.dep > last));
+    }
+    const seen = new Set();
+    const uniq = (t) => {
+      const k = `${t.dep.getTime()}|${t.arr.getTime()}|${t.lines}`;
+      return !seen.has(k) && seen.add(k);
+    };
+    const byDep = (a, b) => a.dep - b.dep;
+    const earlier = before.filter((t) => t.dep < x.from).filter(uniq).sort(byDep).slice(-ALT_EARLIER);
+    onward = onward.filter(uniq).sort(byDep);
+    const upToPlanned = onward.filter((t) => t.dep <= x.to);
+    const later = onward.filter((t) => t.dep > x.to).slice(0, ALT_LATER);
+    const trips = [...earlier, ...upToPlanned, ...later];
     const nextRide = j.legs.find((l) => l.kind === LegKind.RIDE && l.dep.getTime() === x.to.getTime());
     const key = (l) => l && `${l.line}@${l.dep.getTime()}`;
     return trips.map((t) => {
@@ -857,7 +914,17 @@ const Planner = (() => {
     });
   }
 
-  return { plan, visible, suggest, stopAbbr, alternatives };
+  // New search from a transfer stop, from my planned arrival there on.
+  //   toHome:           Nach Hause from the stop
+  //   fromHome / other: Anderer Ort, stop → the journey's destination
+  function followUpSearch(j, x) {
+    if (j.dir === Direction.TO_HOME) {
+      return { dir: Direction.TO_HOME, place: x.stop, origin: "", at: x.from, timeRef: TimeRef.DEPART };
+    }
+    return { dir: Direction.OTHER, origin: x.stop, place: j.query.to, at: x.from, timeRef: TimeRef.DEPART };
+  }
+
+  return { plan, visible, suggest, stopAbbr, alternatives, followUpSearch };
 })();
 
 // ---------- Stations: recent + favorites, persisted in localStorage ----------
@@ -1083,6 +1150,10 @@ function renderDetails(j) {
 
 // Rows of the leg table, incl. our own home walk at the home end.
 function legRows(j) {
+  const api = j.legs.map((l) => ({ ...l, walkMin: Math.round(l.walkSec / 60) }));
+  if (!j.homeEnd) {
+    return api;
+  }
   const homeWalk = {
     kind: LegKind.WALK,
     walkMin: j.walkMin,
@@ -1091,7 +1162,6 @@ function legRows(j) {
     dep: j.walkFirst ? j.start : j.transitEnd,
     arr: j.walkFirst ? j.transitStart : j.end,
   };
-  const api = j.legs.map((l) => ({ ...l, walkMin: Math.round(l.walkSec / 60) }));
   return j.walkFirst ? [homeWalk, ...api] : [...api, homeWalk];
 }
 
@@ -1142,7 +1212,8 @@ function altButton(j, x) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "alt-btn";
-  btn.textContent = `Alternativen ab ${x.stop}`;
+  btn.textContent = "Alternativen";
+  btn.title = `Alternativen ab ${x.stop}`;
   const panel = document.createElement("div");
   panel.hidden = true;
   let loaded = false;
@@ -1163,7 +1234,21 @@ function altButton(j, x) {
     }
   });
 
-  wrap.append(btn, panel);
+  // Right: same parameters as a fresh search, results replace the list.
+  const again = document.createElement("button");
+  again.type = "button";
+  again.className = "alt-btn";
+  again.textContent = "Neue Suche";
+  again.title = `Neue Suche ab ${x.stop}`;
+  again.addEventListener("click", () => startSearch(Planner.followUpSearch(j, x)));
+
+  const btns = document.createElement("div");
+  btns.className = "alt-btns";
+  const label = document.createElement("span");
+  label.className = "at";
+  label.textContent = `Ab ${x.stop}:`;
+  btns.append(label, btn, again);
+  wrap.append(btns, panel);
   return wrap;
 }
 
@@ -1254,92 +1339,111 @@ function renderAlternatives(panel, j, x, alts) {
   panel.append(legend);
 }
 
-// ---------- Place suggestions ----------
+// ---------- Place suggestions (one widget per field: Ort/Nach, Von) ----------
 
-function suggestionItem(name) {
-  const li = document.createElement("li");
-  li.setAttribute("role", "option");
+function placeField(inputId, listId) {
+  const input = () => $(inputId);
+  const list = () => $(listId);
+  let timer = null;
+  let seq = 0;
 
-  const label = document.createElement("span");
-  label.className = "name";
-  label.textContent = name;
+  function item(name) {
+    const li = document.createElement("li");
+    li.setAttribute("role", "option");
 
-  const star = document.createElement("button");
-  star.type = "button";
-  star.className = Stations.isFavorite(name) ? "star on" : "star";
-  star.textContent = "★";
-  star.setAttribute("aria-label", "Favorit");
-  star.addEventListener("click", (e) => {
-    e.stopPropagation();
-    star.classList.toggle("on", Stations.toggleFavorite(name));
-  });
+    const label = document.createElement("span");
+    label.className = "name";
+    label.textContent = name;
 
-  li.append(label, star);
-  li.addEventListener("click", () => {
-    $("place").value = name;
-    closeSuggestions();
-  });
-  return li;
-}
+    const star = document.createElement("button");
+    star.type = "button";
+    star.className = Stations.isFavorite(name) ? "star on" : "star";
+    star.textContent = "★";
+    star.setAttribute("aria-label", "Favorit");
+    star.addEventListener("click", (e) => {
+      e.stopPropagation();
+      star.classList.toggle("on", Stations.toggleFavorite(name));
+    });
 
-function groupItem(text) {
-  const li = document.createElement("li");
-  li.className = "group";
-  li.textContent = text;
-  return li;
-}
-
-function closeSuggestions() {
-  $("sugg").replaceChildren();
-  $("place").setAttribute("aria-expanded", "false");
-}
-
-function showSuggestions(names, grouped) {
-  const list = $("sugg");
-  list.replaceChildren();
-
-  if (grouped) {
-    const favs = Stations.favorites();
-    const recent = Stations.recent();
-    if (favs.length) {
-      list.append(groupItem("Favoriten"), ...favs.map(suggestionItem));
-    }
-    if (recent.length) {
-      list.append(groupItem("Zuletzt"), ...recent.map(suggestionItem));
-    }
-  } else {
-    list.append(...names.map(suggestionItem));
+    li.append(label, star);
+    li.addEventListener("click", () => {
+      input().value = name;
+      close();
+    });
+    return li;
   }
 
-  $("place").setAttribute("aria-expanded", list.children.length ? "true" : "false");
-}
-
-let suggestTimer = null;
-let suggestSeq = 0;
-
-// Empty field: favorites + recent. Otherwise: debounced lookup, stale replies dropped.
-function onPlaceInput() {
-  clearTimeout(suggestTimer);
-  const query = $("place").value.trim();
-  const seq = ++suggestSeq;
-
-  if (!query) {
-    showSuggestions([], true);
-    return;
+  function group(text) {
+    const li = document.createElement("li");
+    li.className = "group";
+    li.textContent = text;
+    return li;
   }
 
-  suggestTimer = setTimeout(async () => {
-    const known = [...Stations.favorites(), ...Stations.recent()];
-    try {
-      const names = await Planner.suggest(query, known);
-      if (seq === suggestSeq) {
-        showSuggestions(names, false);
+  function close() {
+    list().replaceChildren();
+    input().setAttribute("aria-expanded", "false");
+  }
+
+  function show(names, grouped) {
+    const l = list();
+    l.replaceChildren();
+    if (grouped) {
+      const favs = Stations.favorites();
+      const recent = Stations.recent();
+      if (favs.length) {
+        l.append(group("Favoriten"), ...favs.map(item));
       }
-    } catch {
-      closeSuggestions();
+      if (recent.length) {
+        l.append(group("Zuletzt"), ...recent.map(item));
+      }
+    } else {
+      l.append(...names.map(item));
     }
-  }, DEBOUNCE_MS);
+    input().setAttribute("aria-expanded", l.children.length ? "true" : "false");
+  }
+
+  // Empty field: favorites + recent. Otherwise: debounced lookup, stale replies dropped.
+  function onInput() {
+    clearTimeout(timer);
+    const query = input().value.trim();
+    const s = ++seq;
+    if (!query) {
+      show([], true);
+      return;
+    }
+    timer = setTimeout(async () => {
+      const known = [...Stations.favorites(), ...Stations.recent()];
+      try {
+        const names = await Planner.suggest(query, known);
+        if (s === seq) {
+          show(names, false);
+        }
+      } catch {
+        close();
+      }
+    }, DEBOUNCE_MS);
+  }
+
+  // Tap on the field: favorites + recent, not hits for the current text.
+  // Text is selected, so typing replaces it.
+  function onFocus() {
+    clearTimeout(timer);
+    ++seq;
+    show([], true);
+    input().select();
+  }
+
+  function init() {
+    input().addEventListener("input", onInput);
+    input().addEventListener("focus", onFocus);
+  }
+
+  return { init, close };
 }
+
+const placeFields = [placeField("place", "sugg"), placeField("origin", "origin-sugg")];
+const closeSuggestions = () => placeFields.forEach((f) => f.close());
 
 function durationScale(journeys) {
   const mins = journeys.map((j) => minutes(j.start, j.end));
@@ -1553,15 +1657,19 @@ async function onSubmit(e) {
   e.preventDefault();
 
   const place = $("place").value.trim();
-  if (!place) {
+  const origin = $("origin").value.trim();
+  const dir = document.querySelector("input[name=dir]:checked").value;
+  if (!place || (dir === Direction.OTHER && !origin)) {
     return;
   }
 
   closeSuggestions();
+  if (dir === Direction.OTHER) {
+    Stations.touch(origin);
+  }
   Stations.touch(place);
 
   const at = new Date(`${$("date").value}T${$("time").value}`);
-  const dir = document.querySelector("input[name=dir]:checked").value;
   const timeRef = document.querySelector("input[name=ref]:checked").value;
   $("status").className = "";
   $("status").textContent = "Suche …";
@@ -1570,7 +1678,7 @@ async function onSubmit(e) {
   lastResult = null;
 
   try {
-    lastResult = await Planner.plan(place, at, dir, timeRef);
+    lastResult = await Planner.plan(place, at, dir, timeRef, origin);
     render();
   } catch (err) {
     $("status").className = "error";
@@ -1578,19 +1686,34 @@ async function onSubmit(e) {
   }
 }
 
+// Anderer Ort shows the "Von" field and turns "Ort" into "Nach".
+function onDirChange() {
+  const other = document.querySelector("input[name=dir]:checked").value === Direction.OTHER;
+  $("origin-row").hidden = !other;
+  $("origin").required = other;
+  $("place").placeholder = other ? "Nach, z. B. Zürich Flughafen" : "Ort, z. B. Zürich HB";
+}
+
+const pad2 = (n) => String(n).padStart(2, "0");
+
+// Fills the form from search parameters and runs it, e.g. "Neue Suche ab …".
+function startSearch({ dir, origin, place, at, timeRef }) {
+  document.querySelector(`input[name=dir][value="${dir}"]`).checked = true;
+  document.querySelector(`input[name=ref][value="${timeRef}"]`).checked = true;
+  onDirChange();
+  $("origin").value = origin || "";
+  $("place").value = place;
+  $("date").value = `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}`;
+  $("time").value = hhmm(at);
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  $("form").requestSubmit();
+}
+
 initInputs();
 Timeline.init();
+placeFields.forEach((f) => f.init());
+document.querySelectorAll("input[name=dir]").forEach((r) => r.addEventListener("change", onDirChange));
 $("form").addEventListener("submit", onSubmit);
-$("place").addEventListener("input", onPlaceInput);
-// Tap on the field: favorites + recent, not hits for the current text.
-// Text is selected, so typing replaces it.
-function onPlaceFocus() {
-  clearTimeout(suggestTimer);
-  ++suggestSeq;
-  showSuggestions([], true);
-  $("place").select();
-}
-$("place").addEventListener("focus", onPlaceFocus);
 $("walk").addEventListener("change", render);
 let resizeTimer = null;
 window.addEventListener("resize", () => {
@@ -1600,6 +1723,14 @@ window.addEventListener("resize", () => {
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".place")) {
     closeSuggestions();
+  }
+});
+// Close the other field's list when one field gets focus.
+document.addEventListener("focusin", (e) => {
+  if (e.target.id === "place") {
+    placeFields[1].close();
+  } else if (e.target.id === "origin") {
+    placeFields[0].close();
   }
 });
 </script>

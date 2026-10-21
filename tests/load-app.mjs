@@ -63,6 +63,7 @@ export function loadApp() {
       addEventListener() {},
       createElement: () => element(),
       querySelector: () => ({ value: "" }),
+      querySelectorAll: () => [],
     },
     fetch: async (url) => {
       const u = new URL(url);

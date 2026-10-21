@@ -491,8 +491,41 @@ describe("alternatives", () => {
       ["10:39", "planned", 0],
       ["10:54", "later", 45],
     ]);
-    const q = app.requests.filter((r) => r.path === "connections").pop();
-    assert.equal(q.params.get("time"), "10:06"); // arrival 10:26 − 20 min
+    const times = app.requests.filter((r) => r.path === "connections").map((r) => r.params.get("time"));
+    assert.ok(times.includes("10:06")); // earlier ones: arrival 10:26 − 20 min
+    assert.ok(times.includes("10:26")); // onward from arrival
+  });
+
+  // Bug: Oerlikon → Flughafen runs every few minutes; one query from
+  // arrival − 20 min returned only connections before my arrival.
+  test("dense line: still shows planned + later ones, at most 3 earlier", async () => {
+    const app = loadApp();
+    // Trains every 2 min; the API returns 6 from the asked time on.
+    const dense = (p) => {
+      const [h, m] = p.get("time").split(":").map(Number);
+      return [0, 2, 4, 6, 8, 10].map((k) => {
+        const d = new Date(2026, 9, 21, h, m + k);
+        const dep = [d.getHours(), d.getMinutes()];
+        const a = new Date(d.getTime() + 7 * 60000);
+        return conn(ride("S", "16", "Zürich Oerlikon", dep, "Zürich Flughafen", [a.getHours(), a.getMinutes()], { trip: `s16-${dep.join(":")}` }));
+      });
+    };
+    connectionsFor(app, {
+      "Wallisellen→Zürich Flughafen": [conn(
+        ride("S", "14", "Wallisellen", [11, 9], "Zürich Oerlikon", [11, 12], { trip: "s14" }),
+        ride("S", "16", "Zürich Oerlikon", [11, 16], "Zürich Flughafen", [11, 23], { trip: "s16-11:16" }),
+      )],
+      "Zürich Oerlikon→Zürich Flughafen": dense,
+    });
+    const { journeys } = await app.Planner.plan("Zürich Flughafen", at(10, 50), "fromHome", "depart");
+    const j = journeys[0];
+    const alts = [...(await app.Planner.alternatives(j, j.transfers[0]))];
+    const rels = alts.map((a) => a.rel);
+    assert.ok(rels.filter((r) => r === "earlier").length <= 3);
+    assert.ok(rels.includes("planned"), JSON.stringify(alts.map((a) => [hm(a.trip.dep), a.rel])));
+    assert.equal(rels.filter((r) => r === "later" && true).length >= 3, true);
+    const deps = alts.map((a) => hm(a.trip.dep));
+    assert.deepEqual(deps, [...deps].sort()); // in time order
   });
 });
 
@@ -546,5 +579,54 @@ describe("duration color scale", () => {
     assert.match(app.durColor(60, 30, 60), /var\(--bad\) 100%/);
     assert.match(app.durColor(45, 30, 60), /var\(--bad\) 50%/);
     assert.match(app.durColor(40, 40, 40), /var\(--bad\) 0%/); // all equal: all good
+  });
+});
+
+// ---------- Anderer Ort and follow-up search ----------
+
+describe("Anderer Ort", () => {
+  test("plain A → B: one query pair, no home stops, no feeder boards, time unchanged", async () => {
+    const app = loadApp();
+    connectionsFor(app, { "Zürich HB→Bern": [conn(ride("IC", "8", "Zürich HB", [10, 2], "Bern", [10, 58]))] });
+    const { journeys } = await app.Planner.plan("Bern", at(10, 0), "other", "depart", "Zürich HB");
+    assert.equal(journeys.length, 1);
+    assert.equal(hm(journeys[0].start), "10:02"); // no walk added
+    const paths = new Set(app.requests.map((r) => `${r.path} ${r.params.get("from") || r.params.get("station")}`));
+    assert.deepEqual([...paths], ["connections Zürich HB"]);
+    assert.equal(app.requests[0].params.get("time"), "10:00");
+  });
+
+  test("walks at both ends are kept (no home end)", async () => {
+    const app = loadApp();
+    connectionsFor(app, {
+      "A→D": [conn(walk("A", [10, 0], "B", [10, 8]), ride("S", "8", "B", [10, 10], "C", [10, 30]), walk("C", [10, 30], "D", [10, 40]))],
+    });
+    const { journeys } = await app.Planner.plan("D", at(10, 0), "other", "depart", "A");
+    assert.equal(journeys.length, 1);
+    assert.equal(journeys[0].homeEnd, false);
+  });
+});
+
+describe("Neue Suche ab Umsteigeort", () => {
+  test("to home: Nach Hause from the transfer stop, from my arrival there", async () => {
+    const app = loadApp();
+    connectionsFor(app, {
+      "Bern→Wallisellen": [conn(ride("IC", "8", "Bern", [8, 2], "Zürich HB", [8, 58]), ride("S", "8", "Zürich HB", [9, 7], "Wallisellen", [9, 16]))],
+    });
+    const { journeys } = await app.Planner.plan("Bern", at(8, 0), "toHome", "depart");
+    const j = journeys[0];
+    const s = plain(app.Planner.followUpSearch(j, j.transfers[0]));
+    assert.deepEqual({ ...s, at: hm(new Date(s.at)) }, { dir: "toHome", place: "Zürich HB", origin: "", at: "08:58", timeRef: "depart" });
+  });
+
+  test("from home: Anderer Ort from the transfer stop to the original place", async () => {
+    const app = loadApp();
+    connectionsFor(app, {
+      "Wallisellen→Bern": [conn(ride("S", "8", "Wallisellen", [8, 20], "Zürich HB", [8, 30]), ride("IC", "8", "Zürich HB", [8, 32], "Bern", [9, 28]))],
+    });
+    const { journeys } = await app.Planner.plan("Bern", at(8, 0), "fromHome", "depart");
+    const j = journeys[0];
+    const s = plain(app.Planner.followUpSearch(j, j.transfers[0]));
+    assert.deepEqual({ ...s, at: hm(new Date(s.at)) }, { dir: "other", origin: "Zürich HB", place: "Bern", at: "08:30", timeRef: "depart" });
   });
 });

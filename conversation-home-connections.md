@@ -387,3 +387,33 @@ Unit-Tests für alle besprochenen Fälle.
 - 48 Tests: Linienlabels, Fussweg/Umsteigen, Umsteigeort, Abkürzungen, Zeitverschiebung, Fussweg am Heim-Ende, Sortierung/Fenster, Fehler pro Haltestelle, 30-Min.-Paging, Fussweg-Toggle, Zubringer (772 hin/zurück, Umsteigezeit, Wartezeit, Backtracking T12), Duplikate, Dominanz Glatt/Bahnhof, Säntisstrasse/Glatt (Bus) sekundär, Alternativen, Vorschläge, Zuletzt/Favoriten, Dauer-Farbskala.
 - Dabei gefunden und korrigiert: Sekundär-Filter lief nach dem Dominanz-Filter, dadurch konnte Säntisstrasse eine Wallisellen-Verbindung mit demselben Bus verdrängen. Jetzt Sekundär-Filter zuerst.
 - Nicht getestet: Darstellung (Balken, Blasen, Zoom, Scroll).
+
+---
+
+## User
+
+In «Alternativen ab …» Details zu jeder Alternative sehen.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Tippen auf eine Alternative klappt ihre Abschnitte als Tabelle auf (gleiche Tabelle wie in den Details), darunter «n× umsteigen · an Ziel hh:mm, X Min. früher/später als geplant». ▸/▾ zeigt den Zustand.
+- Gestrichelte Ankunftslinie jetzt pro Mini-Balken statt über die ganze Liste (sonst ginge sie durch die aufgeklappte Tabelle).
+
+---
+
+## User
+
+Zwei Buttons nebeneinander: links «Alternativen» wie bisher, rechts neue Suche mit diesen Parametern. Dafür dritte Suchart «Anderer Ort».
+
+## Claude
+
+*(Aktualisiert `index.html`, Tests.)*
+
+- Richtung «Anderer Ort» (`Direction.OTHER`): zusätzliches Feld «Von», Ort-Feld wird «Nach». Einfache Suche Von → Nach (30-Min.-Paging), ohne Heim-Haltestellen, Zubringer und Heimweg; API-Fusswege an beiden Enden bleiben.
+- Pro Umsteigen: «Ab <Haltestelle>: [Alternativen] [Neue Suche]».
+- `Planner.followUpSearch`: Nach Hause → «Nach Hause» ab Umsteigeort; Von zu Hause / Anderer Ort → «Anderer Ort» Umsteigeort → ursprünglicher Ort. Zeit = geplante Ankunft am Umsteigeort, «Ab». Formular wird ausgefüllt und die Suche gestartet.
+- Vorschläge/Favoriten für beide Felder (`placeField`).
+- Fix: `[hidden]` wurde von `.row { display: flex }` überschrieben.
+- 4 neue Tests (52).
