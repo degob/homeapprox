@@ -475,3 +475,18 @@ Auf dem Handy ist die Schrift zu gross (Zeiten und Pillen brechen um).
 - Zeiten, Dauer-Pille und «vor N Min.» brechen nicht mehr um (`white-space: nowrap`).
 - `@media (max-width: 480px)` am Ende des Stylesheets: Grundschrift 15 px, Zeiten 1.1 rem, kleinere Pillen, Meta-Zeilen, Tabelle, Kartenränder.
 - Fix: Vorschlagsliste konnte nach dem Absenden noch aufgehen (verzögerte Suche lief weiter); `close()` bricht sie jetzt ab.
+
+---
+
+## User
+
+Horizontal scrollen und zoomen soll in der ganzen Liste funktionieren, nicht nur auf den Balken.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- `#results { touch-action: pan-y }`: Browser macht nur noch vertikales Scrollen; Pinch-Zoom der Seite in der Liste aus.
+- Timeline: Pinch überall in der Liste zoomt (Referenz = Balken der Karte unter den Fingern). Ein-Finger-Wischen ausserhalb eines Balkens: nach 8 px Richtung festlegen, horizontal → alle Balken scrollen, vertikal → Seite.
+- Desktop: Ctrl+Rad überall in der Liste zoomt, Shift+Rad bzw. seitliches Rad scrollt die Balken.
+- Getestet mit emulierten Touch-Events (Wischen und Pinch auf der Textzeile einer Karte).

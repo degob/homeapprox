@@ -1142,6 +1142,7 @@ function fitLabels(root) {
 function renderJourney(j, t0, t1, scale, past) {
   const li = document.createElement("li");
   li.dataset.startFrac = String((j.start - t0) / (t1 - t0 || 1));
+  li.dataset.endFrac = String((j.end - t0) / (t1 - t0 || 1));
 
   const times = document.createElement("div");
   times.className = "times";
@@ -1671,18 +1672,36 @@ const Timeline = (() => {
   // Zooms so the time under screen x `clientX` stays under it.
   let userZoomed = false;
 
-  function zoomAt(newZoom, clientX, track) {
+  // Zoom keeps a focus point (share of the bar width) at the same x on the
+  // track, so the content there doesn't drift away.
+  function zoomAt(newZoom, track, focus) {
     userZoomed = true;
-    const z = clamp(newZoom);
-    const box = track.getBoundingClientRect();
-    const frac = (track.scrollLeft + clientX - box.left) / track.scrollWidth;
-    zoom = z;
-    root().style.setProperty("--zoom", String(z));
-    const left = frac * track.scrollWidth - (clientX - box.left);
-    track.scrollLeft = left;
+    zoom = clamp(newZoom);
+    root().style.setProperty("--zoom", String(zoom));
+    track.scrollLeft = focus.frac * track.scrollWidth - focus.x;
     scrollAll(track.scrollLeft, track);
     scrollFrac = track.scrollLeft / track.scrollWidth;
     queueFit();
+  }
+
+  // Focus = middle of the journey of the card under the fingers/mouse, kept
+  // where it is on screen; if that middle is off screen, it's brought to the
+  // centre. No card (between cards): the point under the fingers.
+  //   before:  |   [===J===]   |      after zoom:  | [=====J=====] |
+  //                    ^ mid stays here                   ^
+  function focusFor(track, target, clientX) {
+    const box = track.getBoundingClientRect();
+    const li = target.closest?.("#results > li");
+    if (!li) {
+      const x = clientX - box.left;
+      return { frac: (track.scrollLeft + x) / track.scrollWidth, x };
+    }
+    const frac = (Number(li.dataset.startFrac) + Number(li.dataset.endFrac)) / 2;
+    let x = frac * track.scrollWidth - track.scrollLeft;
+    if (x < 0 || x > box.width) {
+      x = box.width / 2;
+    }
+    return { frac, x };
   }
 
   // After a render: user zoom kept; otherwise zoom so an average journey
@@ -1743,7 +1762,8 @@ const Timeline = (() => {
     }
     if (e.touches.length === 2) {
       swipe = null;
-      pinch = { d: dist(e.touches[0], e.touches[1]), zoom, track };
+      const mid = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+      pinch = { d: dist(e.touches[0], e.touches[1]), zoom, track, focus: focusFor(track, e.target, mid) };
     } else if (e.touches.length === 1 && !e.target.closest(".track")) {
       const t = e.touches[0];
       swipe = { x: t.clientX, y: t.clientY, left: track.scrollLeft, lock: null };
@@ -1754,7 +1774,7 @@ const Timeline = (() => {
     if (pinch && e.touches.length === 2) {
       e.preventDefault();
       const [a, b] = e.touches;
-      zoomAt(pinch.zoom * (dist(a, b) / pinch.d), (a.clientX + b.clientX) / 2, pinch.track);
+      zoomAt(pinch.zoom * (dist(a, b) / pinch.d), pinch.track, pinch.focus);
       return;
     }
     if (!swipe || e.touches.length !== 1) {
@@ -1791,7 +1811,7 @@ const Timeline = (() => {
     }
     if (e.ctrlKey) {
       e.preventDefault();
-      zoomAt(zoom * (e.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP), e.clientX, track);
+      zoomAt(zoom * (e.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP), track, focusFor(track, e.target, e.clientX));
       return;
     }
     const sideways = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
