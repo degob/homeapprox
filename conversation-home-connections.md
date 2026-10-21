@@ -257,3 +257,46 @@ Frage: Warum keine Vorschläge ab Furtbach? Vermutete Ursachen (nicht verifizier
 1. API routet «nach Furtbach» mit Fussweg am Ende (z. B. Bahnhof Wallisellen → zu Fuss) → von `homeEndIsClean` verworfen.
 2. HAFAS liefert keine dominierten Verbindungen (später an, mehr Umstiege), daher fehlt die Bus-Variante.
 3. Nur 4 Verbindungen pro Haltestelle (`CONNECTIONS_PER_STOP`).
+
+---
+
+## User
+
+Warum keine Verbindungen ab Furtbach mit Bus 772 (SBB App zeigt sie)?
+
+## Claude
+
+API-Abfragen (transport.opendata.ch): Furtbach → Rigi Kulm, 21.10. 10:00 liefert nur Verbindungen mit Fussweg am Anfang (17 Min. zum Bahnhof Wallisellen bzw. 14 Min. nach Dietlikon, Dornenstrasse). Der 772 um 10:17 wird weggelassen: Fussweg ab 10:22 erreicht dieselbe Ankunft 12:34 mit späterer Abfahrt (dominiert). `via=Wallisellen, Bahnhof` hilft nicht. `homeEndIsClean` verwirft diese korrekt.
+
+## User
+
+Selbst kombinieren, beide Optionen zeigen (zu Fuss und mit 772). Auch Ifang (787 → Dietlikon und → Oerlikon) und Glatt.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- `FEEDERS`: Zubringer-Linie ab Heim-Haltestelle bis Hub, dann API-Verbindung ab Hub.
+  - Furtbach 772 → Wallisellen, Bahnhof → Hub Wallisellen
+  - Ifang 787 → Dietlikon, Bahnhof Ost → Dietlikon; 787 → Zürich Oerlikon, Bahnhof Ost → Zürich Oerlikon
+  - Glatt (Bus) 787 → Oerlikon Bahnhof Ost, 61 → Oerlikon Bahnhof; Glatt (Tram) T12 → Stettbach
+- `/stationboard` (mit `passList`, verifiziert) liefert Zubringer-Fahrten; Umsteigezeit `changeMin` (4–5 Min., geschätzt, nicht vom Fahrplan geprüft).
+- Abfolge: fromHome+ab: Board zuerst, Hub ab erster Ankunft + Umsteigen. Sonst Hub zuerst, Board danach (Fenster ab erster Hub-Abfahrt − 60 Min. bzw. erster Hub-Ankunft + Umsteigen). toHome+an: Hub-Ankunft ≈ Zeit − Gehzeit − 25 Min.
+- Duplikate (gleiche Fahrten, gleiche Zeiten) entfernt; Details zeigen «+ Zubringer …». MAX_RESULTS 15.
+- Pro Suche: 5 + 6 Verbindungs- und bis zu 4 Board-Abfragen (Board-Cache 60 s).
+
+---
+
+## User
+
+Verbindungen als Karten. Oben Zusammenfassung schnellste/langsamste Dauer. Dauer farbig nach Skala (beste grün, schlechteste dunkelrot). In den Details pro Umsteigen Alternativen: früher (falls Zubringer verspätet) und später (falls verpasst), visuell klar.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Karten: `#results > li` mit Rand, Radius 12 px, Abstand.
+- `#summary`: «Schnellste / Langsamste» als Pillen; Dauer-Pille pro Verbindung, Farbe `color-mix(--good → --bad)` linear über die angezeigten Dauern.
+- Details: Button «Alternativen ab <Haltestelle>» pro Umsteigen. `Planner.alternatives`: `/connections` ab Umsteigeort zum letzten Bahnhof, ab Ankunft − 20 Min., 6 Stück. Mini-Zeitachsen; gestrichelt = geplante Ankunft am Umsteigeort; blass = fährt vorher (nur bei Verspätung); umrandet = geplant; rechts Ankunftsdifferenz am Ziel.
+- Zubringer verworfen, wenn Wartezeit am Hub > 20 Min. (`FEEDER_MAX_WAIT_MIN`).
+- Offen: Blasen können sich bei kurzen Abschnitten überdecken.

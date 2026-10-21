@@ -17,6 +17,8 @@
   --transit: #2b5a8c;
   --walk: #3e8a5e;
   --error: #b3261e;
+  --good: #1f8a54;
+  --bad: #8e1b1b;
   color-scheme: light;
   box-sizing: border-box;
   padding-top: env(safe-area-inset-top, 0px);
@@ -32,12 +34,15 @@
     --transit: #7fb0e3;
     --walk: #7cc79a;
     --error: #f2b8b5;
+    --good: #2f9e64;
+    --bad: #b02a2a;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
   --bg: #161b22; --surface: #1f262f; --ink: #e6eaef; --muted: #97a1ae;
   --line: #333c47; --transit: #7fb0e3; --walk: #7cc79a; --error: #f2b8b5;
+  --good: #2f9e64; --bad: #b02a2a;
   color-scheme: dark;
 }
 *, *::before, *::after { box-sizing: inherit; }
@@ -74,12 +79,46 @@ button:focus-visible, input:focus-visible { outline: 2px solid var(--transit); o
 
 ol { list-style: none; padding: 0; margin: 0; }
 li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
-.times { font-size: 1.35rem; font-weight: 700; }
-.dur { color: var(--muted); font-size: 1rem; font-weight: 400; margin-left: .5rem; }
+/* Each connection is a card. */
+#results { display: grid; gap: .75rem; }
+#results > li {
+  padding: .75rem .9rem; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+.times { font-size: 1.35rem; font-weight: 700; display: flex; align-items: center; gap: .5rem; }
+/* Duration pill, colored on the scale best (--good) → worst (--bad). */
+.dur {
+  font-size: .9rem; font-weight: 700; color: #fff; border-radius: 999px;
+  padding: .05rem .55rem; background: var(--muted);
+}
+#summary { display: flex; flex-wrap: wrap; gap: .4rem 1rem; align-items: center; margin: 0 0 .75rem; color: var(--muted); }
+#summary:empty { display: none; }
+#summary .item { display: flex; align-items: center; gap: .4rem; }
 .meta { color: var(--muted); font-size: .95rem; }
 li.clickable { cursor: pointer; }
 .check { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .95rem; }
-.details { margin-top: .5rem; padding: .5rem .75rem; background: var(--surface); border-radius: 8px; font-size: .95rem; }
+.details { margin-top: .5rem; padding: .5rem 0 0; border-top: 1px solid var(--line); font-size: .95rem; cursor: default; }
+.details .alt-btn {
+  font-size: .85rem; font-weight: 700; padding: .3rem .7rem; margin: .3rem .4rem .3rem 0;
+  background: var(--bg); color: var(--transit); border: 1px solid var(--line);
+}
+/* Alternatives at a transfer: mini timelines around the arrival there. */
+.alts { margin: .4rem 0 .6rem; padding: .5rem .6rem; background: var(--bg); border-radius: 8px; }
+.alts h4 { margin: 0 0 .3rem; font-size: .9rem; }
+.alts .axis { position: relative; }
+.alts .now {
+  position: absolute; top: 0; bottom: 0; width: 0; border-left: 2px dashed var(--ink);
+  opacity: .5; pointer-events: none;
+}
+.alt-row { display: grid; grid-template-columns: 7.2rem 1fr 4.6rem; gap: .5rem; align-items: center; padding: .15rem 0; }
+.alt-row .t { font-size: .85rem; }
+.alt-row .d { font-size: .8rem; text-align: right; color: var(--muted); }
+.alt-row .bar.mini { width: 100%; height: 12px; margin: 0; }
+.alt-row .bar.mini .walk, .alt-row .bar.mini .wait { top: 4px; height: 4px; }
+.alt-row.earlier { opacity: .55; }
+.alt-row.planned .t { font-weight: 700; }
+.alt-row.planned .bar.mini { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
+.alts .legend { font-size: .78rem; color: var(--muted); margin-top: .3rem; }
 .details ul { list-style: none; padding: 0; margin: 0 0 .4rem; }
 .details li { padding: .15rem 0; border: 0; }
 
@@ -176,6 +215,7 @@ li.clickable { cursor: pointer; }
 </form>
 
 <p id="status" role="status"></p>
+<div id="summary"></div>
 <ol id="results"></ol>
 </main>
 
@@ -225,9 +265,16 @@ const FEEDERS = Object.freeze([
   { stop: "Wallisellen, Glatt", board: "Wallisellen, Glatt (Tram)", lines: ["12"], mode: "tram",
     alight: "Stettbach, Bahnhof", hub: "Stettbach", changeMin: 4 },
 ]);
-const BOARD_LIMIT = 40;
+const BOARD_LIMIT = 80;
+// Results always cover at least this window after (Ab) / before (An) the
+// asked time; stop queries page on until they do.
+const MIN_WINDOW_MIN = 30;
+const MAX_PAGES = 4;
+const ALT_BEFORE_MIN = 20; // alternatives at a transfer: from arrival − this
+const ALT_LIMIT = 6;
 const BOARD_LOOKBACK_MIN = 60; // board window before the first hub train (arrive mode)
-const FEEDER_ARRIVE_SLACK_MIN = 25; // rough feeder ride + change, toHome + arrive
+const FEEDER_ARRIVE_SLACK_MIN = 25;
+const FEEDER_MAX_WAIT_MIN = 20; // longer wait at the hub: feeder makes no sense // rough feeder ride + change, toHome + arrive
 
 const Direction = Object.freeze({ TO_HOME: "toHome", FROM_HOME: "fromHome" });
 const TimeRef = Object.freeze({ DEPART: "depart", ARRIVE: "arrive" });
@@ -236,7 +283,7 @@ const TRANSFER_WALK_MAX_MIN = 5;
 const WalkMode = Object.freeze({ SHOW: "show", HIDE: "hide" });
 
 const API_BASE = "https://transport.opendata.ch/v1";
-const CONNECTIONS_PER_STOP = 4;
+const CONNECTIONS_PER_STOP = 6;
 const MAX_RESULTS = 15;
 const STOP_ABBR_MAX = 6;
 const MS_PER_MIN = 60_000;
@@ -332,14 +379,14 @@ const TransportApi = (() => {
     return (data.stations || []).map((s) => s.name).filter(Boolean);
   }
 
-  async function connections(from, to, at, timeRef) {
+  async function connections(from, to, at, timeRef, limit = CONNECTIONS_PER_STOP) {
     const params = new URLSearchParams({
       from,
       to,
       date: fmtDate(at),
       time: fmtTime(at),
       isArrivalTime: timeRef === TimeRef.ARRIVE ? "1" : "0",
-      limit: String(CONNECTIONS_PER_STOP),
+      limit: String(limit),
     });
 
     const res = await fetch(`${API_BASE}/connections?${params}`);
@@ -411,8 +458,44 @@ const TransportApi = (() => {
 
 // ---------- Planner: domain logic, adds walking around the transit leg ----------
 
+const AltRel = Object.freeze({ EARLIER: "earlier", PLANNED: "planned", LATER: "later" });
+const minutesBetween = (a, b) => Math.round((b - a) / MS_PER_MIN);
+
 const Planner = (() => {
   const shift = (d, min) => new Date(d.getTime() + min * MS_PER_MIN);
+
+  // Connections until the window [t, t + MIN_WINDOW_MIN] (Ab) or
+  // [t − MIN_WINDOW_MIN, t] (An) is covered: re-asks from just after the last
+  // departure (or before the first arrival) found so far. Deduped.
+  async function connectionsCovering(from, to, t, timeRef) {
+    const depart = timeRef === TimeRef.DEPART;
+    const edge = shift(t, depart ? MIN_WINDOW_MIN : -MIN_WINDOW_MIN);
+    const seen = new Map();
+    let at = t;
+    for (let page = 0; page < MAX_PAGES; page++) {
+      const trips = await TransportApi.connections(from, to, at, timeRef);
+      const before = seen.size;
+      trips.forEach((tr) => seen.set(`${tr.dep.getTime()}|${tr.arr.getTime()}|${tr.lines}`, tr));
+      if (!trips.length || seen.size === before) {
+        break;
+      }
+      const all = [...seen.values()];
+      if (depart) {
+        const last = new Date(Math.max(...all.map((tr) => tr.dep)));
+        if (last >= edge) {
+          break;
+        }
+        at = shift(last, 1);
+      } else {
+        const first = new Date(Math.min(...all.map((tr) => tr.arr)));
+        if (first <= edge) {
+          break;
+        }
+        at = shift(first, -1);
+      }
+    }
+    return [...seen.values()];
+  }
 
   // Time to ask the API for, so that walking is already accounted for.
   // E.g. leave home 08:00, walk 15 → train must depart from 08:15.
@@ -464,7 +547,7 @@ const Planner = (() => {
   async function forStop(stop, place, at, dir, timeRef) {
     const t = queryTime(at, dir, timeRef, stop.walkMin);
     const [from, to] = dir === Direction.TO_HOME ? [place, stop.name] : [stop.name, place];
-    const trips = await TransportApi.connections(from, to, t, timeRef);
+    const trips = await connectionsCovering(from, to, t, timeRef);
     const query = { from, to, at: t, timeRef };
     return trips
       .filter((trip) => homeEndIsClean(trip, dir))
@@ -481,6 +564,10 @@ const Planner = (() => {
       ? rides.filter((r) => shift(r.arr, f.changeMin) <= hubTrip.dep).sort((a, b) => b.arr - a.arr)[0]
       : rides.filter((r) => r.dep >= shift(hubTrip.arr, f.changeMin)).sort((a, b) => a.dep - b.dep)[0];
     if (!ride) {
+      return null;
+    }
+    const wait = fromHome ? minutesBetween(ride.arr, hubTrip.dep) : minutesBetween(hubTrip.arr, ride.dep);
+    if (wait > FEEDER_MAX_WAIT_MIN) {
       return null;
     }
     const legs = fromHome ? [ride, ...hubTrip.legs] : [...hubTrip.legs, ride];
@@ -513,12 +600,12 @@ const Planner = (() => {
         return [];
       }
       hubTime = shift(rides[0].arr, f.changeMin);
-      hubTrips = await TransportApi.connections(from, to, hubTime, timeRef);
+      hubTrips = await connectionsCovering(from, to, hubTime, timeRef);
     } else {
       hubTime = !fromHome && timeRef === TimeRef.ARRIVE
         ? shift(at, -stop.walkMin - FEEDER_ARRIVE_SLACK_MIN)
         : at;
-      hubTrips = await TransportApi.connections(from, to, hubTime, timeRef);
+      hubTrips = await connectionsCovering(from, to, hubTime, timeRef);
       hubTrips = hubTrips.filter((t) => homeEndIsClean(t, dir));
       if (!hubTrips.length) {
         return [];
@@ -580,13 +667,27 @@ const Planner = (() => {
     const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
     journeys = journeys.filter(fits).sort((a, b) => a.start - b.start);
 
-    return { journeys, failed };
+    return { journeys, failed, at, timeRef };
   }
 
   // Applied on already fetched journeys, so toggling needs no new search.
-  function visible(journeys, walkMode) {
+  // Everything inside the MIN_WINDOW_MIN window is shown, however many;
+  // beyond it, filled up to MAX_RESULTS.
+  function visible(result, walkMode) {
+    const { journeys, at, timeRef } = result;
     const shown = walkMode === WalkMode.HIDE ? journeys.filter((j) => !j.hasExtraWalk) : journeys;
-    return shown.slice(0, MAX_RESULTS);
+    const inWindow = timeRef === TimeRef.DEPART
+      ? (j) => j.start <= shift(at, MIN_WINDOW_MIN)
+      : (j) => j.end >= shift(at, -MIN_WINDOW_MIN);
+    const core = shown.filter(inWindow);
+    const room = Math.max(0, MAX_RESULTS - core.length);
+    const outside = shown.filter((j) => !inWindow(j));
+    // Ab: next ones after the window; An: the latest ones before it.
+    const rest = timeRef === TimeRef.DEPART ? outside.slice(0, room) : outside.slice(-room || outside.length);
+    if (!room) {
+      rest.length = 0;
+    }
+    return [...core, ...rest].sort((a, b) => a.start - b.start);
   }
 
   // Town part of a stop name: before the comma, else the first word.
@@ -635,7 +736,29 @@ const Planner = (() => {
     return local.concat(fresh).slice(0, MAX_SUGGESTIONS);
   }
 
-  return { plan, visible, suggest, stopAbbr };
+  // Onward connections from a transfer stop to the journey's last station,
+  // around the planned one. Arrival there (`x.from`) splits them:
+  //   EARLIER: leaves before I arrive → only if my feeder is late
+  //   PLANNED: same first ride as the proposal
+  //   LATER:   fallback if I miss it
+  async function alternatives(j, x) {
+    const dest = j.to;
+    const trips = await TransportApi.connections(x.stop, dest, shift(x.from, -ALT_BEFORE_MIN), TimeRef.DEPART, ALT_LIMIT);
+    const nextRide = j.legs.find((l) => l.kind === LegKind.RIDE && l.dep.getTime() === x.to.getTime());
+    const key = (l) => l && `${l.line}@${l.dep.getTime()}`;
+    return trips.map((t) => {
+      const first = t.legs.find((l) => l.kind === LegKind.RIDE);
+      let rel = AltRel.LATER;
+      if (key(first) === key(nextRide)) {
+        rel = AltRel.PLANNED;
+      } else if (t.dep < x.from) {
+        rel = AltRel.EARLIER;
+      }
+      return { trip: t, rel, delta: minutesBetween(j.transitEnd, t.arr) };
+    });
+  }
+
+  return { plan, visible, suggest, stopAbbr, alternatives };
 })();
 
 // ---------- Stations: recent + favorites, persisted in localStorage ----------
@@ -688,6 +811,12 @@ function initInputs() {
   const now = new Date();
   $("date").valueAsDate = new Date(now.getTime() - now.getTimezoneOffset() * MS_PER_MIN);
   $("time").value = hhmm(now);
+}
+
+// Duration color: share of --bad on the scale best → worst duration.
+function durColor(min, best, worst) {
+  const p = worst > best ? Math.round(((min - best) / (worst - best)) * 100) : 0;
+  return `color-mix(in oklab, var(--bad) ${p}%, var(--good))`;
 }
 
 // Positions a bar segment on the shared time axis [t0, t1].
@@ -760,7 +889,7 @@ function fitLabels(root) {
   fitPins(root);
 }
 
-function renderJourney(j, t0, t1) {
+function renderJourney(j, t0, t1, scale) {
   const li = document.createElement("li");
   li.dataset.startFrac = String((j.start - t0) / (t1 - t0 || 1));
 
@@ -769,7 +898,9 @@ function renderJourney(j, t0, t1) {
   times.textContent = `${hhmm(j.start)} – ${hhmm(j.end)}`;
   const dur = document.createElement("span");
   dur.className = "dur";
-  dur.textContent = `${minutes(j.start, j.end)} Min.`;
+  const durMin = minutes(j.start, j.end);
+  dur.textContent = `${durMin} Min.`;
+  dur.style.background = durColor(durMin, scale.best, scale.worst);
   times.append(dur);
 
   const track = document.createElement("div");
@@ -855,8 +986,118 @@ function renderDetails(j) {
   const feeder = j.query.feeder ? ` + Zubringer ${j.query.feeder}` : "";
   q.textContent = `Abfrage: ${j.query.from} → ${j.query.to}, ${ref} ${hhmm(j.query.at)}${feeder}`;
 
-  box.append(legs, q);
+  box.addEventListener("click", (e) => e.stopPropagation());
+  box.append(legs);
+  j.transfers.forEach((x) => box.append(altButton(j, x)));
+  box.append(q);
   return box;
+}
+
+// Button per transfer; loads and toggles the alternatives below it.
+function altButton(j, x) {
+  const wrap = document.createElement("div");
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "alt-btn";
+  btn.textContent = `Alternativen ab ${x.stop}`;
+  const panel = document.createElement("div");
+  panel.hidden = true;
+  let loaded = false;
+
+  btn.addEventListener("click", async () => {
+    panel.hidden = !panel.hidden;
+    if (loaded || panel.hidden) {
+      return;
+    }
+    loaded = true;
+    panel.className = "alts";
+    panel.textContent = "Suche …";
+    try {
+      renderAlternatives(panel, j, x, await Planner.alternatives(j, x));
+    } catch (err) {
+      loaded = false;
+      panel.textContent = `Fehler: ${err.message}`;
+    }
+  });
+
+  wrap.append(btn, panel);
+  return wrap;
+}
+
+const ALT_REL_TEXT = {
+  [AltRel.EARLIER]: "falls verspätet",
+  [AltRel.PLANNED]: "geplant",
+  [AltRel.LATER]: "verpasst",
+};
+
+// Mini timelines on a common axis; dashed line = my planned arrival at the
+// transfer stop. Left of it: only reachable if that one is late.
+function renderAlternatives(panel, j, x, alts) {
+  panel.replaceChildren();
+  const head = document.createElement("h4");
+  head.textContent = `Ab ${x.stop} nach ${j.to} · an ${hhmm(x.from)}`;
+  panel.append(head);
+
+  if (!alts.length) {
+    panel.append("Keine Verbindungen gefunden.");
+    return;
+  }
+
+  const t0 = Math.min(x.from, ...alts.map((a) => a.trip.dep));
+  const t1 = Math.max(...alts.map((a) => a.trip.arr));
+  const axis = document.createElement("div");
+  axis.className = "axis";
+
+  alts.forEach((a) => {
+    const row = document.createElement("div");
+    row.className = `alt-row ${a.rel}`;
+    const t = document.createElement("span");
+    t.className = "t";
+    t.textContent = `${hhmm(a.trip.dep)} – ${hhmm(a.trip.arr)}`;
+    const bar = document.createElement("div");
+    bar.className = "bar mini";
+    a.trip.legs.forEach((l) => {
+      if (l.kind === LegKind.RIDE) {
+        bar.append(labelled("transit", l.dep, l.arr, t0, t1, [l.line], `${l.line} → ${l.headsign}`));
+      } else if (l.kind === LegKind.WALK) {
+        bar.append(segment("walk", l.dep, l.arr, t0, t1));
+      }
+    });
+    if (!a.trip.legs.length) {
+      bar.append(segment("transit", a.trip.dep, a.trip.arr, t0, t1));
+    }
+    const d = document.createElement("span");
+    d.className = "d";
+    const delta = a.delta === 0 ? "±0" : a.delta > 0 ? `+${a.delta}` : `−${-a.delta}`;
+    d.textContent = a.rel === AltRel.PLANNED ? ALT_REL_TEXT[a.rel] : `${delta} Min.`;
+    d.title = ALT_REL_TEXT[a.rel];
+    row.append(t, bar, d);
+    axis.append(row);
+  });
+
+  // Dashed "arrival" marker spans the bar column only.
+  const now = document.createElement("span");
+  now.className = "now";
+  axis.append(now);
+  panel.append(axis);
+  const placeMarker = () => {
+    const bar = axis.querySelector(".bar.mini");
+    if (!bar) {
+      return;
+    }
+    const ab = axis.getBoundingClientRect();
+    const bb = bar.getBoundingClientRect();
+    now.style.left = `${bb.left - ab.left + ((x.from - t0) / (t1 - t0 || 1)) * bb.width}px`;
+  };
+  requestAnimationFrame(() => {
+    placeMarker();
+    fitLabels(panel);
+  });
+
+  const legend = document.createElement("div");
+  legend.className = "legend";
+  legend.textContent = "Gestrichelt: geplante Ankunft hier. Blass: fährt vorher, nur erreichbar bei Verspätung. ± = Ankunft am Ziel gegenüber geplant.";
+  panel.append(legend);
 }
 
 // ---------- Place suggestions ----------
@@ -946,6 +1187,32 @@ function onPlaceInput() {
   }, DEBOUNCE_MS);
 }
 
+function durationScale(journeys) {
+  const mins = journeys.map((j) => minutes(j.start, j.end));
+  return { best: Math.min(...mins), worst: Math.max(...mins) };
+}
+
+// Top line: fastest and slowest door-to-door duration of the shown journeys.
+function renderSummary(journeys) {
+  const box = $("summary");
+  box.replaceChildren();
+  if (!journeys.length) {
+    return;
+  }
+  const { best, worst } = durationScale(journeys);
+  const item = (label, min) => {
+    const span = document.createElement("span");
+    span.className = "item";
+    const pill = document.createElement("span");
+    pill.className = "dur";
+    pill.textContent = `${min} Min.`;
+    pill.style.background = durColor(min, best, worst);
+    span.append(label, pill);
+    return span;
+  };
+  box.append(item("Schnellste", best), item("Langsamste", worst));
+}
+
 // Last search result; the walk toggle filters it without searching again.
 let lastResult = null;
 
@@ -954,13 +1221,15 @@ const walkMode = () => ($("walk").checked ? WalkMode.SHOW : WalkMode.HIDE);
 function render() {
   const list = $("results");
   list.replaceChildren();
+  $("summary").replaceChildren();
   if (!lastResult) {
     return;
   }
 
   const { failed } = lastResult;
-  const journeys = Planner.visible(lastResult.journeys, walkMode());
+  const journeys = Planner.visible(lastResult, walkMode());
 
+  renderSummary(journeys);
   const status = $("status");
   status.className = failed.length ? "error" : "";
   status.textContent = failed.length ? `Keine Daten für: ${failed.join(", ")}` : "";
@@ -972,7 +1241,8 @@ function render() {
 
   const t0 = Math.min(...journeys.map((j) => j.start));
   const t1 = Math.max(...journeys.map((j) => j.end));
-  journeys.forEach((j) => list.append(renderJourney(j, t0, t1)));
+  const scale = durationScale(journeys);
+  journeys.forEach((j) => list.append(renderJourney(j, t0, t1, scale)));
   Timeline.restore(list);
   fitLabels(list);
 }
@@ -1142,6 +1412,7 @@ async function onSubmit(e) {
   $("status").className = "";
   $("status").textContent = "Suche …";
   $("results").replaceChildren();
+  $("summary").replaceChildren();
   lastResult = null;
 
   try {
