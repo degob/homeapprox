@@ -87,6 +87,7 @@ li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
   background: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,.06);
 }
 .times { font-size: 1.35rem; font-weight: 700; display: flex; align-items: center; gap: .5rem; }
+.times .push { margin-left: auto; }
 /* Duration pill, colored on the scale best (--good) → worst (--bad). */
 .dur {
   font-size: .9rem; font-weight: 700; color: #fff; border-radius: 999px;
@@ -1139,6 +1140,8 @@ function renderJourney(j, t0, t1, scale, past) {
     times.append(tag);
   }
   times.append(dur);
+  // Tag + duration pushed to the right edge of the card.
+  (times.querySelector(".past-tag") || dur).classList.add("push");
 
   const track = document.createElement("div");
   track.className = "track";
@@ -1592,14 +1595,18 @@ function render() {
     li.classList.toggle("past", Boolean(pastLabel(j)));
     list.append(li);
   });
-  Timeline.restore(list);
+  const avg = journeys.reduce((sum, j) => sum + (j.end - j.start), 0) / journeys.length;
+  Timeline.fit(list, t1 - t0, avg);
   fitLabels(list);
 }
 
 // ---------- Timeline zoom: pinch / Ctrl+wheel widens all bars, swipe scrolls ----------
 
 const ZOOM_MIN = 1;
-const ZOOM_MAX = 8;
+const ZOOM_MAX = 12;
+// Start zoom: a journey of average duration fills this share of the card width
+// (longer ones run past the edge; swipe or zoom out).
+const BAR_FILL = 0.8;
 const WHEEL_ZOOM_STEP = 1.1;
 const FOLLOW_MARGIN_PX = 8;
 
@@ -1637,7 +1644,10 @@ const Timeline = (() => {
   }
 
   // Zooms so the time under screen x `clientX` stays under it.
+  let userZoomed = false;
+
   function zoomAt(newZoom, clientX, track) {
+    userZoomed = true;
     const z = clamp(newZoom);
     const box = track.getBoundingClientRect();
     const frac = (track.scrollLeft + clientX - box.left) / track.scrollWidth;
@@ -1648,6 +1658,25 @@ const Timeline = (() => {
     scrollAll(track.scrollLeft, track);
     scrollFrac = track.scrollLeft / track.scrollWidth;
     queueFit();
+  }
+
+  // After a render: user zoom kept; otherwise zoom so an average journey
+  // fills BAR_FILL of the width, scrolled to the first connections on screen.
+  // All bars still share one time axis, so they stay comparable.
+  function fit(list, span, average) {
+    if (userZoomed) {
+      restore(list);
+      return;
+    }
+    zoom = clamp((BAR_FILL * span) / (average || span || 1));
+    list.style.setProperty("--zoom", String(zoom));
+    followNow();
+  }
+
+  // New search: back to automatic zoom.
+  function reset() {
+    userZoomed = false;
+    scrollFrac = 0;
   }
 
   // After a re-render: same zoom and position as before.
@@ -1704,8 +1733,8 @@ const Timeline = (() => {
     zoomAt(zoom * (e.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP), e.clientX, track);
   }
 
-  // Vertical scroll: move the timeline so the earliest start among the
-  // connections on screen sits at the left edge.
+  // Vertical scroll: move the timeline so the topmost card's start sits at
+  // the left edge (see followNow).
   let followQueued = false;
   function followViewport() {
     if (zoom <= ZOOM_MIN || pinch || followQueued) {
@@ -1714,18 +1743,26 @@ const Timeline = (() => {
     followQueued = true;
     requestAnimationFrame(() => {
       followQueued = false;
-      const onScreen = [...root().children].filter((li) => {
-        const r = li.getBoundingClientRect();
-        return r.bottom > 0 && r.top < window.innerHeight;
-      });
-      const first = root().querySelector(".track");
-      if (!onScreen.length || !first) {
-        return;
-      }
-      const frac = Math.min(...onScreen.map((li) => Number(li.dataset.startFrac)));
-      scrollAll(Math.max(0, frac * first.scrollWidth - FOLLOW_MARGIN_PX));
-      scrollFrac = first.scrollLeft / first.scrollWidth;
+      followNow();
     });
+  }
+
+  // Anchor = topmost card still at least half on screen; its start goes to
+  // the left edge, cards below run on to the right. (Earlier: the earliest of
+  // all cards on screen, which barely moved once several were visible.)
+  function followNow() {
+    const first = root().querySelector(".track");
+    const cards = [...root().children];
+    if (!first || !cards.length) {
+      return;
+    }
+    const anchor = cards.find((li) => {
+      const r = li.getBoundingClientRect();
+      return r.top + r.height / 2 >= 0;
+    }) || cards[cards.length - 1];
+    const frac = Number(anchor.dataset.startFrac);
+    scrollAll(Math.max(0, frac * first.scrollWidth - FOLLOW_MARGIN_PX));
+    scrollFrac = first.scrollLeft / first.scrollWidth;
   }
 
   function init() {
@@ -1741,7 +1778,7 @@ const Timeline = (() => {
     r.addEventListener("gesturestart", (e) => e.preventDefault());
   }
 
-  return { init, restore };
+  return { init, restore, fit, reset };
 })();
 
 async function onSubmit(e) {
@@ -1769,6 +1806,7 @@ async function onSubmit(e) {
 
   try {
     lastResult = await Planner.search(place, at, dir, timeRef, origin);
+    Timeline.reset();
     render();
   } catch (err) {
     $("status").className = "error";

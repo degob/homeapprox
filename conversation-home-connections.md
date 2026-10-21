@@ -432,3 +432,31 @@ Alternativen zeigen nur Verbindungen in der Vergangenheit (Oerlikon → Flughafe
 - Jetzt zwei parallele Abfragen: ab Ankunft − 20 Min. (davon max. 3 vor der Ankunft) und ab Ankunft (alle bis zur geplanten Abfahrt + 3 danach, bei Bedarf eine Folgeabfrage).
 - Mini-Balken 14 px, Labels nicht mehr abgeschnitten.
 - Test für den dichten Takt (schlägt mit der alten Version fehl). 53 Tests.
+
+---
+
+## User
+
+Immer Verbindungen zeigen, die vor bis zu 5 Min. losgingen (lohnt sich rennen?). Buttons «Frühere» oben und «Spätere» unten.
+
+## Claude
+
+*(Aktualisiert `index.html`, Tests.)*
+
+- `Planner.search`: bei «Ab» wird ab Zeit − 5 Min. (`RECENT_PAST_MIN`) gesucht; Fenster [Zeit − 5, Zeit + 30]. Solche Karten gestrichelt mit rotem Tag «vor N Min.» (bzw. «N Min. früher», wenn nicht jetzt gesucht). Bei «An» kein Rückblick.
+- `Planner.extend`: «Frühere» / «Spätere» holen 30 Min. (`MORE_STEP_MIN`) ausserhalb des Fensters, mergen (Duplikate, Pruning), Fenster wird breiter. Liste bleibt, Zoom/Scroll bleiben.
+- Mit «Frühere» geholte, ältere Verbindungen bekommen kein «vor N Min.»-Tag.
+- 4 neue Tests (57).
+
+---
+
+## User
+
+Dauer-Pille und «vor N Min.» rechtsbündig. Balken auf ca. 80 % der Kartenbreite – oder gibt es einen Grund dagegen?
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Tag + Dauer-Pille rechtsbündig (`.push { margin-left: auto }`).
+- Balken schmal, weil alle Karten eine gemeinsame Zeitachse teilen (vergleichbar). Statt eigener Achse pro Karte: Start-Zoom so, dass eine Verbindung mit Durchschnittsdauer 80 % (`BAR_FILL`) der Breite füllt (vom User gewünscht statt der längsten); Position folgt den sichtbaren Karten. Eigener Zoom (Pinch/Ctrl+Rad) bleibt bis zur nächsten Suche. `ZOOM_MAX` 12.
