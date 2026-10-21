@@ -460,3 +460,18 @@ Dauer-Pille und «vor N Min.» rechtsbündig. Balken auf ca. 80 % der Kartenbrei
 
 - Tag + Dauer-Pille rechtsbündig (`.push { margin-left: auto }`).
 - Balken schmal, weil alle Karten eine gemeinsame Zeitachse teilen (vergleichbar). Statt eigener Achse pro Karte: Start-Zoom so, dass eine Verbindung mit Durchschnittsdauer 80 % (`BAR_FILL`) der Breite füllt (vom User gewünscht statt der längsten); Position folgt den sichtbaren Karten. Eigener Zoom (Pinch/Ctrl+Rad) bleibt bis zur nächsten Suche. `ZOOM_MAX` 12.
+- Nachtrag: Mitscrollen verankert jetzt an der obersten Karte, die noch mindestens zur Hälfte sichtbar ist (vorher: früheste Startzeit aller sichtbaren Karten, das bewegte sich kaum). Dadurch beginnt die oberste Karte links und längere Verbindungen sind nicht scheinbar «zu schmal».
+
+---
+
+## User
+
+Auf dem Handy ist die Schrift zu gross (Zeiten und Pillen brechen um).
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Zeiten, Dauer-Pille und «vor N Min.» brechen nicht mehr um (`white-space: nowrap`).
+- `@media (max-width: 480px)` am Ende des Stylesheets: Grundschrift 15 px, Zeiten 1.1 rem, kleinere Pillen, Meta-Zeilen, Tabelle, Kartenränder.
+- Fix: Vorschlagsliste konnte nach dem Absenden noch aufgehen (verzögerte Suche lief weiter); `close()` bricht sie jetzt ab.

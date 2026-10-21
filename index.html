@@ -88,6 +88,8 @@ li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
 }
 .times { font-size: 1.35rem; font-weight: 700; display: flex; align-items: center; gap: .5rem; }
 .times .push { margin-left: auto; }
+.times .tt, .dur, .past-tag { white-space: nowrap; }
+
 /* Duration pill, colored on the scale best (--good) → worst (--bad). */
 .dur {
   font-size: .9rem; font-weight: 700; color: #fff; border-radius: 999px;
@@ -168,6 +170,9 @@ li.clickable { cursor: pointer; }
   scrollbar-width: none; touch-action: pan-x pan-y;
 }
 .track::-webkit-scrollbar { display: none; }
+/* Whole list: native vertical scroll only; pinch and sideways swipes are
+   handled by Timeline for all bars together. */
+#results { touch-action: pan-y; }
 .bar { position: relative; height: 18px; width: calc(100% * var(--zoom, 1)); }
 .bar span { position: absolute; top: 0; height: 100%; border-radius: 4px; }
 .bar .walk { background: repeating-linear-gradient(90deg, var(--walk) 0 4px, transparent 4px 7px); top: 7px; height: 4px; }
@@ -215,6 +220,20 @@ li.clickable { cursor: pointer; }
 .sugg .group:hover { background: none; }
 .star { background: none; color: var(--muted); padding: 0 .2rem; font-size: 1.1rem; line-height: 1; }
 .star.on { color: var(--transit); }
+/* Phones: smaller type so "11:42 – 12:13" and both pills fit on one line. */
+@media (max-width: 480px) {
+  body { font-size: 15px; }
+  h1 { font-size: 1.3rem; margin-bottom: .9rem; }
+  .times { font-size: 1.1rem; gap: .35rem; }
+  .dur { font-size: .78rem; padding: 0 .45rem; }
+  .past-tag { font-size: .72rem; padding: 0 .35rem; }
+  .meta { font-size: .85rem; }
+  .seg label { padding: .4rem .6rem; }
+  #summary { font-size: .9rem; }
+  #results > li { padding: .6rem .75rem; }
+  .track { margin-inline: calc(6px - .75rem); }
+  .legs { font-size: .8rem; }
+}
 </style>
 </head>
 <body>
@@ -1126,7 +1145,10 @@ function renderJourney(j, t0, t1, scale, past) {
 
   const times = document.createElement("div");
   times.className = "times";
-  times.textContent = `${hhmm(j.start)} – ${hhmm(j.end)}`;
+  const tt = document.createElement("span");
+  tt.className = "tt";
+  tt.textContent = `${hhmm(j.start)} – ${hhmm(j.end)}`;
+  times.append(tt);
   const dur = document.createElement("span");
   dur.className = "dur";
   const durMin = minutes(j.start, j.end);
@@ -1454,7 +1476,10 @@ function placeField(inputId, listId) {
     return li;
   }
 
+  // Also cancels a pending lookup, so it can't pop up after a search started.
   function close() {
+    clearTimeout(timer);
+    ++seq;
     list().replaceChildren();
     input().setAttribute("aria-expanded", "false");
   }
@@ -1700,44 +1725,88 @@ const Timeline = (() => {
   let pinch = null;
   const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
 
+  // Track used as geometry reference for a gesture anywhere in the list:
+  // the bar of the card under the finger, else the first one.
+  const trackAt = (target) =>
+    target.closest?.(".track") || target.closest?.("#results > li")?.querySelector(".track") || root().querySelector(".track");
+
+  // One-finger swipe outside a bar: horizontal → scroll all bars; vertical →
+  // page scrolls natively (#results has touch-action: pan-y). On a bar the
+  // native horizontal scroll does it.
+  let swipe = null;
+  const SWIPE_LOCK_PX = 8;
+
   function onTouchStart(e) {
-    const track = e.target.closest?.(".track") || root().querySelector(".track");
-    if (e.touches.length !== 2 || !track) {
+    const track = trackAt(e.target);
+    if (!track) {
       return;
     }
-    pinch = { d: dist(e.touches[0], e.touches[1]), zoom, track };
+    if (e.touches.length === 2) {
+      swipe = null;
+      pinch = { d: dist(e.touches[0], e.touches[1]), zoom, track };
+    } else if (e.touches.length === 1 && !e.target.closest(".track")) {
+      const t = e.touches[0];
+      swipe = { x: t.clientX, y: t.clientY, left: track.scrollLeft, lock: null };
+    }
   }
 
   function onTouchMove(e) {
-    if (!pinch || e.touches.length !== 2) {
+    if (pinch && e.touches.length === 2) {
+      e.preventDefault();
+      const [a, b] = e.touches;
+      zoomAt(pinch.zoom * (dist(a, b) / pinch.d), (a.clientX + b.clientX) / 2, pinch.track);
       return;
     }
-    e.preventDefault();
-    const [a, b] = e.touches;
-    zoomAt(pinch.zoom * (dist(a, b) / pinch.d), (a.clientX + b.clientX) / 2, pinch.track);
+    if (!swipe || e.touches.length !== 1) {
+      return;
+    }
+    const dx = e.touches[0].clientX - swipe.x;
+    const dy = e.touches[0].clientY - swipe.y;
+    if (!swipe.lock && Math.max(Math.abs(dx), Math.abs(dy)) > SWIPE_LOCK_PX) {
+      swipe.lock = Math.abs(dx) > Math.abs(dy) ? "x" : "y";
+    }
+    if (swipe.lock === "x") {
+      e.preventDefault();
+      scrollAll(swipe.left - dx);
+      const first = root().querySelector(".track");
+      scrollFrac = first ? first.scrollLeft / first.scrollWidth : 0;
+    }
   }
 
   function onTouchEnd(e) {
     if (e.touches.length < 2) {
       pinch = null;
     }
+    if (!e.touches.length) {
+      swipe = null;
+    }
   }
 
-  // Desktop: Ctrl+wheel (also trackpad pinch) zooms, Shift+wheel scrolls natively.
+  // Desktop, anywhere in the list: Ctrl+wheel (also trackpad pinch) zooms;
+  // Shift+wheel or sideways wheel scrolls the bars (on a bar natively).
   function onWheel(e) {
-    const track = e.target.closest?.(".track");
-    if (!e.ctrlKey || !track) {
+    const track = trackAt(e.target);
+    if (!track) {
       return;
     }
-    e.preventDefault();
-    zoomAt(zoom * (e.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP), e.clientX, track);
+    if (e.ctrlKey) {
+      e.preventDefault();
+      zoomAt(zoom * (e.deltaY < 0 ? WHEEL_ZOOM_STEP : 1 / WHEEL_ZOOM_STEP), e.clientX, track);
+      return;
+    }
+    const sideways = e.shiftKey || Math.abs(e.deltaX) > Math.abs(e.deltaY);
+    if (sideways && !e.target.closest(".track")) {
+      e.preventDefault();
+      scrollAll(track.scrollLeft + (e.deltaX || e.deltaY));
+      scrollFrac = track.scrollLeft / track.scrollWidth;
+    }
   }
 
   // Vertical scroll: move the timeline so the topmost card's start sits at
   // the left edge (see followNow).
   let followQueued = false;
   function followViewport() {
-    if (zoom <= ZOOM_MIN || pinch || followQueued) {
+    if (zoom <= ZOOM_MIN || pinch || swipe?.lock === "x" || followQueued) {
       return;
     }
     followQueued = true;
