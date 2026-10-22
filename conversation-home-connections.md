@@ -706,3 +706,18 @@ Linienfilter zuunterst, eingeklappt starten.
 ## Claude
 
 *(Aktualisiert `index.html`.)* Linien-↺ in die vierte Grid-Spalte.
+
+---
+
+## User
+
+Mehrere Ziele eingeben können; Routen zu allen. (Rückfrage: Chips; nur Ziel, nicht «Von».)
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Vorschlag wählen → Chip `[Zürich HB ×]` unter dem Feld, Feld leer für das nächste Ziel. Noch getippter Text zählt beim Suchen mit. Mindestens ein Ziel.
+- `Planner.plan(places, …)` plant pro Ziel (`planOne`) parallel, mischt, sortiert nach Abfahrt. `params.places` für Frühere/Spätere. Fehlermeldungen bei mehreren Zielen mit Ziel-Präfix.
+- «Neue Suche ab …» setzt genau ein Ziel.
+- Nicht übergreifend geprunt: Verbindungen zu verschiedenen Zielen konkurrieren nicht.

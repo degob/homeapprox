@@ -132,6 +132,14 @@ button.more:disabled { opacity: .6; cursor: default; }
 li.clickable { cursor: pointer; }
 #summary .toggle { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
 #summary .chips { flex-wrap: wrap; gap: .3rem; white-space: normal; }
+.dests { display: flex; flex-wrap: wrap; gap: .3rem; width: 100%; }
+.dests:empty { display: none; }
+.dest {
+  display: inline-flex; align-items: center; gap: .2rem; font-size: .9rem;
+  padding: .1rem .3rem .1rem .6rem; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--line);
+}
+.dest .rm { background: none; color: var(--muted); padding: 0 .3rem; font-size: 1rem; line-height: 1; }
 .chip {
   font-size: .8rem; font-weight: 700; padding: .05rem .5rem; border-radius: 999px;
   background: var(--surface); color: var(--transit); border: 1px solid var(--transit);
@@ -299,6 +307,8 @@ li.clickable { cursor: pointer; }
              autocomplete="off" role="combobox" aria-expanded="false" aria-controls="sugg">
       <ul id="sugg" class="sugg" role="listbox"></ul>
     </div>
+    <!-- Picked destinations; the field then takes the next one. -->
+    <div id="dests" class="dests"></div>
   </div>
 
   <div class="row">
@@ -874,7 +884,26 @@ const Planner = (() => {
   }
 
   // `origin` only for Direction.OTHER.
-  async function plan(place, at, dir, timeRef, origin) {
+  // Several destinations: plan each, merge, order by departure. Failures
+  // are labelled with the place when there is more than one.
+  async function plan(places, at, dir, timeRef, origin) {
+    const settled = await Promise.allSettled(places.map((p) => planOne(p, at, dir, timeRef, origin)));
+    const failed = [];
+    let journeys = [];
+    settled.forEach((r, i) => {
+      if (r.status === "rejected") {
+        failed.push(places[i]);
+        return;
+      }
+      const tag = places.length > 1 ? `${places[i]}: ` : "";
+      failed.push(...r.value.failed.map((f) => tag + f));
+      journeys = journeys.concat(r.value.journeys);
+    });
+    journeys.sort((a, b) => a.start - b.start);
+    return { journeys, failed, at, timeRef, ...defaultRange(at, timeRef) };
+  }
+
+  async function planOne(place, at, dir, timeRef, origin) {
     if (dir === Direction.OTHER) {
       return planOther(origin, place, at, timeRef);
     }
@@ -1048,11 +1077,11 @@ const Planner = (() => {
 
   // Entry point of the form. Ab also fetches what left up to
   // RECENT_PAST_MIN ago; `at` stays the asked time (for the "vor N Min." tag).
-  async function search(place, at, dir, timeRef, origin) {
+  async function search(places, at, dir, timeRef, origin) {
     const lookback = timeRef === TimeRef.DEPART ? RECENT_PAST_MIN : 0;
-    const r = await plan(place, shift(at, -lookback), dir, timeRef, origin);
+    const r = await plan(places, shift(at, -lookback), dir, timeRef, origin);
     const hi = timeRef === TimeRef.DEPART ? shift(at, MIN_WINDOW_MIN) : r.hi;
-    return { ...r, at, hi, params: { place, dir, timeRef, origin } };
+    return { ...r, at, hi, params: { places, dir, timeRef, origin } };
   }
 
   // "Frühere" / "Spätere": fetch the next MORE_STEP_MIN outside the window,
@@ -1060,7 +1089,7 @@ const Planner = (() => {
   //   Ab: earlier = depart from lo − step; later = depart from hi
   //   An: earlier = arrive by lo;          later = arrive by hi + step
   async function extend(result, side) {
-    const { place, dir, timeRef, origin } = result.params;
+    const { places, dir, timeRef, origin } = result.params;
     const earlier = side === "earlier";
     const depart = timeRef === TimeRef.DEPART;
     const lo = earlier ? shift(result.lo, -MORE_STEP_MIN) : result.lo;
@@ -1071,7 +1100,7 @@ const Planner = (() => {
     } else {
       q = earlier ? result.lo : hi;
     }
-    const more = await plan(place, q, dir, timeRef, origin);
+    const more = await plan(places, q, dir, timeRef, origin);
     return {
       ...result,
       journeys: prune([...result.journeys, ...more.journeys], dir),
@@ -1592,7 +1621,8 @@ function renderAlternatives(panel, j, x, alts) {
 
 // ---------- Place suggestions (one widget per field: Ort/Nach, Von) ----------
 
-function placeField(inputId, listId) {
+// `onPick(name)`: what a chosen suggestion does; default fills the field.
+function placeField(inputId, listId, onPick = (name) => { $(inputId).value = name; }) {
   const input = () => $(inputId);
   const list = () => $(listId);
   let timer = null;
@@ -1618,7 +1648,7 @@ function placeField(inputId, listId) {
 
     li.append(label, star);
     li.addEventListener("click", () => {
-      input().value = name;
+      onPick(name);
       close();
     });
     return li;
@@ -1696,7 +1726,59 @@ function placeField(inputId, listId) {
   return { init, close };
 }
 
-const placeFields = [placeField("place", "sugg"), placeField("origin", "origin-sugg")];
+// Destination chips under the place field. A picked suggestion becomes a
+// chip and clears the field; typed text left in the field counts too.
+//   [Zürich HB ×] [Stettbach ×]   ┌ Ort … ┐
+const Destinations = (() => {
+  let names = [];
+
+  function render() {
+    const box = $("dests");
+    box.replaceChildren();
+    names.forEach((name) => {
+      const chip = document.createElement("span");
+      chip.className = "dest";
+      chip.append(name);
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "rm";
+      rm.textContent = "×";
+      rm.setAttribute("aria-label", `${name} entfernen`);
+      rm.addEventListener("click", () => { remove(name); });
+      chip.append(rm);
+      box.append(chip);
+    });
+    $("place").required = names.length === 0;
+  }
+
+  function add(name) {
+    if (name && !names.includes(name)) {
+      names = [...names, name];
+    }
+    $("place").value = "";
+    render();
+  }
+
+  function remove(name) {
+    names = names.filter((n) => n !== name);
+    render();
+  }
+
+  function set(list) {
+    names = [...new Set(list.filter(Boolean))];
+    render();
+  }
+
+  // Chips plus whatever is still typed in the field.
+  function all() {
+    const typed = $("place").value.trim();
+    return typed && !names.includes(typed) ? [...names, typed] : names;
+  }
+
+  return { add, set, all, render };
+})();
+
+const placeFields = [placeField("place", "sugg", Destinations.add), placeField("origin", "origin-sugg")];
 const closeSuggestions = () => placeFields.forEach((f) => f.close());
 
 function durationScale(journeys) {
@@ -2272,18 +2354,19 @@ const Timeline = (() => {
 async function onSubmit(e) {
   e.preventDefault();
 
-  const place = $("place").value.trim();
+  const places = Destinations.all();
   const origin = $("origin").value.trim();
   const dir = document.querySelector("input[name=dir]:checked").value;
-  if (!place || (dir === Direction.OTHER && !origin)) {
+  if (!places.length || (dir === Direction.OTHER && !origin)) {
     return;
   }
 
   closeSuggestions();
+  Destinations.set(places);
   if (dir === Direction.OTHER) {
     Stations.touch(origin);
   }
-  Stations.touch(place);
+  places.forEach(Stations.touch);
 
   const at = new Date(`${$("date").value}T${$("time").value}`);
   const timeRef = document.querySelector("input[name=ref]:checked").value;
@@ -2296,7 +2379,7 @@ async function onSubmit(e) {
   render();
 
   try {
-    lastResult = await Planner.search(place, at, dir, timeRef, origin);
+    lastResult = await Planner.search(places, at, dir, timeRef, origin);
     Timeline.reset();
     render();
   } catch (err) {
@@ -2321,7 +2404,7 @@ function startSearch({ dir, origin, place, at, timeRef }) {
   document.querySelector(`input[name=ref][value="${timeRef}"]`).checked = true;
   onDirChange();
   $("origin").value = origin || "";
-  $("place").value = place;
+  Destinations.set([place]);
   $("date").value = `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}`;
   $("time").value = hhmm(at);
   window.scrollTo({ top: 0, behavior: "smooth" });
