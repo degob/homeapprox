@@ -75,7 +75,8 @@ button {
 }
 button:focus-visible, input:focus-visible { outline: 2px solid var(--transit); outline-offset: 2px; }
 
-#status { color: var(--muted); margin: 1.25rem 0 .5rem; min-height: 1.5em; }
+#status { color: var(--muted); margin: .75rem 0 .5rem; }
+#status:empty { display: none; }
 #status.error { color: var(--error); }
 
 ol { list-style: none; padding: 0; margin: 0; }
@@ -95,7 +96,20 @@ li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
   font-size: .9rem; font-weight: 700; color: #fff; border-radius: 999px;
   padding: .05rem .55rem; background: var(--muted);
 }
-#summary { display: flex; flex-wrap: wrap; gap: .4rem 1rem; align-items: center; margin: 0 0 .75rem; color: var(--muted); }
+/* Summary card: grid, one row per measure.
+   icon | range (fills) | ✂ slot | ↺ slot  — slots fixed so rows align. */
+#summary {
+  display: grid; grid-template-columns: auto 1fr 1.6rem 1.6rem; gap: .35rem .6rem;
+  align-items: center; margin: .75rem 0; padding: .5rem .75rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--muted);
+}
+#summary .icon { color: var(--transit); font-weight: 700; width: 1.2rem; text-align: center; }
+#summary .range { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
+#summary .slot { display: flex; justify-content: center; }
+#summary .jump { cursor: pointer; }
+#summary .jump:hover { outline: 2px solid var(--transit); outline-offset: 1px; border-radius: 4px; }
+#summary .dur.jump:hover { border-radius: 999px; }
 #summary:empty { display: none; }
 button.more {
   display: block; width: 100%; margin: .75rem 0; background: var(--surface);
@@ -108,10 +122,16 @@ button.more:disabled { opacity: .6; cursor: default; }
   font-size: .8rem; font-weight: 700; color: var(--bad); border: 1px solid currentColor;
   border-radius: 999px; padding: 0 .45rem;
 }
-#summary .item { display: flex; align-items: center; gap: .4rem; }
+/* Small round icon buttons in the summary: cut the top value, reset the cap. */
+.icon-btn {
+  width: 1.6rem; height: 1.6rem; padding: 0; border-radius: 50%;
+  background: var(--surface); color: var(--transit); border: 1px solid var(--line);
+  font-size: .9rem; line-height: 1;
+}
 .meta { color: var(--muted); font-size: .95rem; }
 li.clickable { cursor: pointer; }
-.check { display: flex; align-items: center; gap: .5rem; color: var(--muted); font-size: .95rem; }
+#summary .toggle { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
+#summary .toggle input { margin: 0; accent-color: var(--transit); }
 .details { margin-top: .5rem; padding: .5rem 0 0; border-top: 1px solid var(--line); font-size: .95rem; cursor: default; }
 .alt-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 0 .4rem; }
 .alt-btns .at { font-size: .85rem; font-weight: 700; margin-right: .2rem; }
@@ -283,10 +303,10 @@ li.clickable { cursor: pointer; }
     <button type="submit">Suchen</button>
   </div>
 
-  <div class="row">
-    <label class="check"><input type="checkbox" id="walk" checked> Verbindungen mit zusätzlichem Fussweg zeigen</label>
-  </div>
 </form>
+
+<!-- Walk toggle; render() moves it into the summary's third row. -->
+<input type="checkbox" id="walk" checked hidden aria-label="Verbindungen mit zusätzlichem Fussweg zeigen">
 
 <p id="status" role="status"></p>
 <div id="summary"></div>
@@ -370,6 +390,7 @@ const TimeRef = Object.freeze({ DEPART: "depart", ARRIVE: "arrive" });
 const LegKind = Object.freeze({ RIDE: "ride", WALK: "walk", CHANGE: "change" });
 const TRANSFER_WALK_MAX_MIN = 5;
 const WalkMode = Object.freeze({ SHOW: "show", HIDE: "hide" });
+const CapKind = Object.freeze({ DURATION: "duration", CHANGES: "changes" });
 
 const API_BASE = "https://transport.opendata.ch/v1";
 const CONNECTIONS_PER_STOP = 6;
@@ -1646,31 +1667,191 @@ function durationScale(journeys) {
   return { best: Math.min(...mins), worst: Math.max(...mins) };
 }
 
-// Top line: fastest and slowest door-to-door duration of the shown journeys.
-function renderSummary(journeys) {
+// ---------- Caps: trim the slowest / most-changes journeys step by step ----------
+
+const CUT_ICON = "✂";
+const RESET_ICON = "↺";
+const DURATION_ICON = "⏱";
+const WALK_ICON = "🚶";
+const CHANGES_ICON = "⇄";
+const DURATION_CUT_STEP_MIN = 5;
+// Share of journeys kept when jumping straight to the best value.
+const KEEP_SHARE = 0.1;
+
+const durationOf = (j) => minutes(j.start, j.end);
+const changesOf = (j) => j.transfers.length;
+
+// One cap per measure. cut() lowers the cap by at least the measure's step
+// below the current maximum of the shown journeys, landing on an existing
+// value, e.g. durations 31 38 41 52, step 5 → 41 (≤ 47). It ends at the
+// minimum; reset() lifts the cap.
+const Caps = (() => {
+  const caps = { [CapKind.DURATION]: null, [CapKind.CHANGES]: null };
+  const measure = { [CapKind.DURATION]: durationOf, [CapKind.CHANGES]: changesOf };
+  const step = { [CapKind.DURATION]: DURATION_CUT_STEP_MIN, [CapKind.CHANGES]: 1 };
+
+  // `except`: leave that one cap out, to see what it alone hides.
+  const apply = (journeys, except = null) =>
+    journeys.filter((j) =>
+      Object.keys(caps).every((k) => k === except || caps[k] === null || measure[k](j) <= caps[k])
+    );
+
+  function nextCap(kind, journeys) {
+    const values = [...new Set(journeys.map(measure[kind]))].sort((a, b) => a - b);
+    if (values.length < 2) {
+      return null;
+    }
+    const target = values[values.length - 1] - step[kind];
+    const below = values.filter((v) => v <= target);
+    return below.length ? below[below.length - 1] : values[0];
+  }
+
+  // Cap at the N-th smallest value, N = KEEP_SHARE of the shown journeys
+  // (at least one): e.g. 12 journeys → 2 kept → cap = 2nd smallest duration.
+  function cutToBest(kind, journeys) {
+    const sorted = journeys.map(measure[kind]).sort((a, b) => a - b);
+    const keep = Math.max(1, Math.ceil(sorted.length * KEEP_SHARE));
+    caps[kind] = sorted[keep - 1];
+  }
+
+  const canCut = (kind, journeys) => nextCap(kind, journeys) !== null;
+  const cut = (kind, journeys) => { caps[kind] = nextCap(kind, journeys) ?? caps[kind]; };
+  const reset = (kind) => { caps[kind] = null; };
+  const resetAll = () => Object.keys(caps).forEach(reset);
+  const active = (kind) => caps[kind] !== null;
+
+  return { apply, canCut, cut, cutToBest, reset, resetAll, active };
+})();
+
+function iconButton(icon, title, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "icon-btn";
+  btn.textContent = icon;
+  btn.title = title;
+  btn.setAttribute("aria-label", title);
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+// Third summary row: the walk toggle; "3/8" = journeys with an extra walk
+// out of all that pass the caps.
+//   🚶  Mit zusätzlichem Fussweg (3/8)        [x]
+function walkRow(everything) {
+  const capped = Caps.apply(everything);
+  const n = capped.filter((j) => j.hasExtraWalk).length;
+  const icon = document.createElement("span");
+  icon.className = "icon";
+  icon.textContent = WALK_ICON;
+  icon.title = "Zusätzlicher Fussweg";
+  const label = document.createElement("label");
+  label.className = "range toggle";
+  label.append(`Mit zusätzlichem Fussweg (${n}/${capped.length})`);
+  const slot = document.createElement("span");
+  slot.className = "slot";
+  walkBox.hidden = false;
+  slot.append(walkBox);
+  label.htmlFor = "walk";
+  return [icon, label, slot, document.createElement("span")];
+}
+
+// Summary grid, one row per measure: icon | range | ✂ ↺ (right-aligned,
+// slots kept so nothing jumps when a button appears).
+//   ⏱  [31 Min.] – [52 Min.]        ✂  ↺
+//   ⇄  0 – 2× umsteigen             ✂
+// `all` = journeys before the caps: colors and the "(max. …)" hint keep
+// referring to the full range, so a capped list still shows what was cut.
+function renderSummary(journeys, all, everything) {
   const box = $("summary");
   box.replaceChildren();
+  if (!everything.length) {
+    return;
+  }
+  box.append(...walkRow(everything));
   if (!journeys.length) {
     return;
   }
+  const scale = durationScale(all);
   const { best, worst } = durationScale(journeys);
-  const item = (label, min) => {
+  // What each cap alone hides: other filters applied, this one left out.
+  const worstButDur = durationScale(Caps.apply(all, CapKind.DURATION)).worst;
+  const maxCButChg = Math.max(...Caps.apply(all, CapKind.CHANGES).map(changesOf));
+
+  const pill = (min) => {
+    const p = document.createElement("span");
+    p.className = "dur";
+    p.textContent = `${min} Min.`;
+    p.style.background = durColor(min, scale.best, scale.worst);
+    return p;
+  };
+  // Clickable pills: best jumps straight to the shortest durations
+  // (cutToBest), worst cuts one step like the scissors.
+  const clickable = (el, title, action) => {
+    el.classList.add("jump");
+    el.title = title;
+    el.setAttribute("role", "button");
+    el.addEventListener("click", () => { action(); render(); });
+    return el;
+  };
+  const toBest = (kind) => () => Caps.cutToBest(kind, journeys);
+  const cutOne = (kind) => () => Caps.cut(kind, journeys);
+  const bestPill = (min) => clickable(pill(min), "Nur die kürzesten zeigen", toBest(CapKind.DURATION));
+  const worstPill = (min) => clickable(pill(min), "Längste weglassen", cutOne(CapKind.DURATION));
+  const text = (t) => {
+    const s = document.createElement("span");
+    s.textContent = t;
+    return s;
+  };
+  const range = (lo, hi) => (lo === hi ? [lo] : [lo, " – ", hi]);
+  const cell = (cls, ...parts) => {
     const span = document.createElement("span");
-    span.className = "item";
-    const pill = document.createElement("span");
-    pill.className = "dur";
-    pill.textContent = `${min} Min.`;
-    pill.style.background = durColor(min, best, worst);
-    span.append(label, pill);
+    span.className = cls;
+    span.append(...parts);
     return span;
   };
-  box.append(item("Schnellste", best), item("Langsamste", worst));
+  const row = (kind, icon, iconTitle, ...parts) => {
+    const ic = cell("icon", icon);
+    ic.title = iconTitle;
+    ic.setAttribute("aria-label", iconTitle);
+    const cut = Caps.canCut(kind, journeys)
+      ? iconButton(CUT_ICON, "Grösste weglassen", () => { Caps.cut(kind, journeys); render(); })
+      : "";
+    const reset = Caps.active(kind)
+      ? iconButton(RESET_ICON, "Filter aufheben", () => { Caps.reset(kind); render(); })
+      : "";
+    return [ic, cell("range", ...parts), cell("slot", cut), cell("slot", reset)];
+  };
+
+  const changes = journeys.map(changesOf);
+  const minC = Math.min(...changes);
+  const maxC = Math.max(...changes);
+  // Shown when a cap hides the top: "(max. 52 Min.)"; click lifts the cap.
+  const hint = (kind, shown, full, unit) =>
+    shown < full ? [clickable(text(`(max. ${full}${unit})`), "Filter aufheben", () => Caps.reset(kind))] : [];
+
+  box.append(
+    ...row(CapKind.DURATION, DURATION_ICON, "Dauer",
+      ...(best === worst ? [pill(best)] : [bestPill(best), " – ", worstPill(worst)]),
+      ...hint(CapKind.DURATION, worst, worstButDur, " Min.")),
+    ...row(CapKind.CHANGES, CHANGES_ICON, "Umsteigen", ...(minC === maxC
+      ? [text(`${minC}× umsteigen`)]
+      : [
+          clickable(text(String(minC)), "Nur die wenigsten zeigen", toBest(CapKind.CHANGES)),
+          " – ",
+          clickable(text(String(maxC)), "Meiste weglassen", cutOne(CapKind.CHANGES)),
+          "× umsteigen",
+        ]),
+      ...hint(CapKind.CHANGES, maxC, maxCButChg, "×"))
+  );
 }
 
 // Last search result; the walk toggle filters it without searching again.
 let lastResult = null;
 
-const walkMode = () => ($("walk").checked ? WalkMode.SHOW : WalkMode.HIDE);
+// Held by reference: the box lives inside #summary, which render() rebuilds,
+// so it is detached between renders and $("walk") would miss it.
+const walkBox = $("walk");
+const walkMode = () => (walkBox.checked ? WalkMode.SHOW : WalkMode.HIDE);
 
 // "vor 3 Min." if the asked time is now, else "3 Min. früher"; null if not past.
 function pastLabel(j) {
@@ -1697,9 +1878,11 @@ function render() {
   }
 
   const { failed } = lastResult;
-  const journeys = Planner.visible(lastResult, walkMode());
+  const everything = Planner.visible(lastResult, WalkMode.SHOW);
+  const all = Planner.visible(lastResult, walkMode());
+  const journeys = Caps.apply(all);
 
-  renderSummary(journeys);
+  renderSummary(journeys, all, everything);
   const status = $("status");
   status.className = failed.length ? "error" : "";
   status.textContent = failed.length ? `Keine Daten für: ${failed.join(", ")}` : "";
@@ -1711,7 +1894,7 @@ function render() {
 
   const t0 = Math.min(...journeys.map((j) => j.start));
   const t1 = Math.max(...journeys.map((j) => j.end));
-  const scale = durationScale(journeys);
+  const scale = durationScale(all);
   journeys.forEach((j) => {
     const li = renderJourney(j, t0, t1, scale, pastLabel(j));
     li.classList.toggle("past", Boolean(pastLabel(j)));
@@ -1987,6 +2170,7 @@ async function onSubmit(e) {
   $("status").className = "";
   $("status").textContent = "Suche …";
   lastResult = null;
+  Caps.resetAll();
   render();
 
   try {
@@ -2050,7 +2234,7 @@ $("later").addEventListener("click", () => onMore("later"));
 placeFields.forEach((f) => f.init());
 document.querySelectorAll("input[name=dir]").forEach((r) => r.addEventListener("change", onDirChange));
 $("form").addEventListener("submit", onSubmit);
-$("walk").addEventListener("change", render);
+walkBox.addEventListener("change", render);
 let resizeTimer = null;
 window.addEventListener("resize", () => {
   clearTimeout(resizeTimer);

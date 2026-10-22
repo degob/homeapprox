@@ -558,3 +558,104 @@ Die Umsteigen-Zeile braucht es gar nicht mehr.
 ## Claude
 
 Ort vor dem Komma war selbst zweiteilig; nach Wegfall von «Bahnhof Ost» blieb der ganze Ort. `shortName()` kürzt den Ort dann auf alles nach dem ersten Wort → «Oerlikon».
+
+---
+
+## User
+
+Im Dauer-Bereich «Schnellste»/«Langsamste» weg. Kleiner Icon-Button, der die längste Dauer wegschneidet (bis zur nächstlängeren), beliebig oft bis nur die kürzeste bleibt; Filter wieder aufhebbar. Zeile darunter: dasselbe für Anzahl Umsteigen.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Zusammenfassung, zwei Zeilen: `[31 Min.] – [52 Min.] ✂ ↺` und `0 – 2× umsteigen ✂ ↺`.
+- `Caps`: pro Mass eine Obergrenze. ✂ setzt sie auf den nächsttieferen Wert unter dem aktuellen Maximum der angezeigten Verbindungen; ✂ verschwindet, wenn nur ein Wert bleibt. ↺ hebt auf. Beide Grenzen wirken zusammen, nach dem Fussweg-Toggle.
+- Neue Suche setzt die Grenzen zurück; «Frühere/Spätere» behält sie.
+- `Caps` ohne DOM getestet.
+
+## User
+
+Layout besser. Dauer-Schnitt in mindestens 5-Minuten-Schritten, bei vielen Verbindungen ist einzeln zu mühsam.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Zusammenfassung als Karte, Grid `Icon | Bereich | ✂ | ↺`; feste Button-Spalten, nichts springt. `⏱ [31 Min.] – [52 Min.]`, `⇄ 0 – 2× umsteigen`.
+- `DURATION_CUT_STEP_MIN = 5`: Schnitt auf den grössten vorhandenen Wert ≤ Maximum − 5, sonst Minimum. Umsteigen weiter in 1er-Schritten. Beispiel 31 33 38 41 44 52 53 → 44 → 38 → 33 → 31.
+
+## User
+
+Klick auf die kürzeste Dauer soll direkt danach filtern, mit Puffer: mindestens 10 % der Verbindungen bleiben.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Pille «kürzeste Dauer» klickbar: `Caps.cutToBest()` setzt die Grenze auf den N-t-kleinsten Wert, N = ⌈10 % der angezeigten⌉, min. 1 (`KEEP_SHARE`). Gleiche Werte bleiben alle (≤ Grenze). ↺ hebt auf.
+- Beispiel: 12 Verbindungen → N = 2 → Grenze = zweitkürzeste Dauer.
+
+## User
+
+Klick auf die längste Dauer = Schere.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Pille «längste Dauer» klickbar, ruft `Caps.cut()` wie ✂. Bei nur einem Wert ist die Pille passiv.
+
+## User
+
+Dasselbe für Umsteigen.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Zahlen in `⇄ 0 – 2× umsteigen` klickbar: Minimum → `cutToBest(CHANGES)`, Maximum → `cut(CHANGES)`.
+
+## User
+
+Beim Filtern der Dauer weiterhin die längste Dauer sehen; Farbskala auf der ungefilterten längsten Dauer behalten.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Farbskala (Pillen in Karten und Zusammenfassung) aus der Liste vor den Grenzen (`all`), nur Fussweg-Toggle angewandt.
+- Zusammenfassung zeigt den gefilterten Bereich, bei aktiver Grenze dahinter «(max. 52 Min.)» bzw. «(max. 2×)».
+
+## User
+
+Lücke zwischen Checkbox und Resultaten Absicht? Klick auf «(max. …)» soll den Filter auch aufheben.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Lücke kam vom leeren `#status` (Mindesthöhe + Rand); leer jetzt ausgeblendet, Ränder kleiner. «(max. …)» klickbar → `Caps.reset()`.
+
+## User
+
+Checkbox in den Filterbereich als dritte Zeile, mit Icon «Fussgänger ok».
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Dritte Zeile: `🚶 Mit zusätzlichem Fussweg (3) [x]`; Zahl = Verbindungen mit Fussweg insgesamt.
+- Die Checkbox bleibt ein Element (`walkBox`, per Referenz gehalten) und wird bei jedem Render in die Zeile verschoben; `#summary` wird sonst komplett neu aufgebaut.
+- Zusammenfassung erscheint, sobald ohne Fussweg-Filter Verbindungen da sind, damit der Toggle nie verschwindet.
+- Icon ist das Emoji 🚶; rendert je nach System farbig. SVG möglich.
+
+## User
+
+Klick auf einen Filter muss die Klammer-Texte der anderen Filter aktualisieren.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* `Caps.apply(journeys, except)` lässt eine Grenze aus. «(max. …)» und «(N)» zeigen nun, was der jeweilige Filter allein ausblendet, alle anderen Filter angewandt. Farbskala weiter aus `all` (nur Fussweg-Toggle).
+
+## User
+
+Fussgänger-Filter als x/y (5 von 8 Verbindungen).
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Zeile: `Mit zusätzlichem Fussweg (3/8)` = mit Fussweg / alle, die die Grenzen passieren. Immer angezeigt, auch 0/8.
