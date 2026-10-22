@@ -1098,6 +1098,28 @@ function stopPin(name, at, align, t0, t1) {
   return pin;
 }
 
+// A walk at the far end hides where the first/last ride starts/ends:
+//   Selnau ····walk····► Zürich HB ──S9──► ...   → pin "Zürich HB" too.
+// Walks between rides are already pinned as transfers.
+function edgeWalkPins(j, t0, t1) {
+  const rides = j.legs.filter((l) => l.kind === LegKind.RIDE);
+  if (!rides.length) {
+    return [];
+  }
+
+  const pins = [];
+  const first = j.legs[0];
+  const last = j.legs[j.legs.length - 1];
+  if (first.kind === LegKind.WALK) {
+    pins.push(stopPin(rides[0].from, rides[0].dep, "", t0, t1));
+  }
+  if (last.kind === LegKind.WALK) {
+    const r = rides[rides.length - 1];
+    pins.push(stopPin(r.to, r.arr, "", t0, t1));
+  }
+  return pins;
+}
+
 const PIN_GAP_PX = 3;
 
 // Per bar: longest text form that lets no two bubbles overlap, same form for
@@ -1191,18 +1213,14 @@ function renderJourney(j, t0, t1, scale, past) {
       ? j.legs.map(legSeg).filter(Boolean)
       : [labelled("transit", j.transitStart, j.transitEnd, t0, t1, [j.lines], j.lines)]),
     stopPin(j.from, j.transitStart, "start", t0, t1),
+    ...edgeWalkPins(j, t0, t1),
     ...j.transfers.map((x) =>
       stopPin(x.stop, new Date((x.from.getTime() + x.to.getTime()) / 2), "", t0, t1)
     ),
     stopPin(j.to, j.transitEnd, "end", t0, t1)
   );
 
-  const meta = document.createElement("div");
-  meta.className = "meta";
-  const extra = j.hasExtraWalk ? " · + Fussweg" : "";
-  meta.textContent = `${j.stop} · ${j.lines}${extra}`;
-
-  li.append(times, track, meta);
+  li.append(times, track);
 
   if (j.transfers.length) {
     const xfer = document.createElement("div");

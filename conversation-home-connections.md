@@ -490,3 +490,16 @@ Horizontal scrollen und zoomen soll in der ganzen Liste funktionieren, nicht nur
 - Timeline: Pinch überall in der Liste zoomt (Referenz = Balken der Karte unter den Fingern). Ein-Finger-Wischen ausserhalb eines Balkens: nach 8 px Richtung festlegen, horizontal → alle Balken scrollen, vertikal → Seite.
 - Desktop: Ctrl+Rad überall in der Liste zoomt, Shift+Rad bzw. seitliches Rad scrollt die Balken.
 - Getestet mit emulierten Touch-Events (Wischen und Pinch auf der Textzeile einer Karte).
+
+---
+
+## User
+
+Bei «Nach Hause» nennt die erste Meta-Zeile die Suchhaltestelle; klingt wie der erste Schritt, ist aber der letzte. Zeile weglassen, nur «Umsteigen: …» behalten. Beginnt die Verbindung zu Fuss, fehlt die Sprechblase am Ziel des Fusswegs.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Meta-Zeile «Haltestelle · Linien · + Fussweg» entfernt. Linien stehen im Balken, Fussweg ist gepunktet sichtbar.
+- `edgeWalkPins()`: Fussweg am fernen Ende → zusätzliche Blase am Start der ersten bzw. Ende der letzten Fahrt. Fusswege zwischen Fahrten waren schon als Umsteigen gepinnt.
