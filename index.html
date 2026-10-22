@@ -189,19 +189,26 @@ li.clickable { cursor: pointer; }
 .bar .transit.lbl { color: var(--bg); }
 /* Stop bubble above the bar. Transfer: tip at the gap's middle.
    Start/end: tip at the bubble's left/right edge, so it stays inside the track. */
+/* placePins() sets `left` (bubble box) and --tip (tip x inside the bubble),
+   so a bubble may slide sideways as long as its tip stays over the stop. */
 .bar .pin {
-  top: auto; bottom: calc(100% + 5px); height: auto; transform: translateX(-50%);
+  top: auto; bottom: calc(100% + 5px); height: auto;
   padding: 0 .3rem; border-radius: 4px; white-space: nowrap;
   font-size: .72rem; line-height: 1.4; background: var(--muted); color: var(--bg);
 }
 .bar .pin::after {
-  content: ""; position: absolute; left: 50%; top: 100%; margin-left: -4px;
+  content: ""; position: absolute; left: var(--tip, 50%); top: 100%; margin-left: -4px;
   border: 4px solid transparent; border-top-color: var(--muted);
 }
-.bar .pin.start { transform: none; }
-.bar .pin.start::after { left: 0; margin-left: 0; }
-.bar .pin.end { transform: translateX(-100%); }
-.bar .pin.end::after { left: auto; right: 0; margin-left: 0; }
+/* Second bubble row, used when names would overlap in one row. A thin line
+   connects the raised bubble down to the bar. */
+.track { --pin-row: 1.35rem; }
+.track.two-rows { padding-top: calc(1.5rem + var(--pin-row)); }
+.bar .pin.up { bottom: calc(100% + 5px + var(--pin-row)); }
+.bar .pin.up::before {
+  content: ""; position: absolute; left: var(--tip, 50%); top: 100%;
+  width: 1px; height: calc(var(--pin-row) + 5px); background: var(--muted);
+}
 
 /* Place field with suggestion dropdown. */
 .place { position: relative; flex: 1 1 14rem; }
@@ -895,6 +902,27 @@ const Planner = (() => {
   //   "Zürich HB"               → "ZHB"
   //   "Zürich, Bahnhofplatz/HB" → "ZBahnh"
   //   "Wallisellen, Bahnhof"    → "Wallis"
+  // Short name: town dropped when a distinct part remains, "Bahnhof" and
+  // anything after it dropped, bracketed suffix dropped.
+  //   "Wallisellen, Furtbach"       → "Furtbach"
+  //   "Zürich HB"                   → "HB"
+  //   "Zürich Oerlikon Bahnhof Ost" → "Oerlikon"
+  //   "Wallisellen, Bahnhof"        → "Wallisellen"
+  //   "Wallisellen, Glatt (Tram)"   → "Glatt"
+  //   "Zürich Oerlikon, Bahnhof Ost"→ "Oerlikon"  (town itself is "City Part")
+  function shortName(name) {
+    const { town, rest } = splitTown(name);
+    const core = rest
+      .replace(/(^|[\s,])Bahnhof(?=$|[\s,]).*$/i, "")
+      .replace(/\s*\(.*?\)\s*$/, "")
+      .trim();
+    if (core) {
+      return core;
+    }
+    const space = town.indexOf(" ");
+    return space < 0 ? town : town.slice(space + 1);
+  }
+
   function stopAbbr(name) {
     const letters = (t) => t.replace(/[^\p{L}\p{N}]/gu, "");
     const { town, rest } = splitTown(name);
@@ -1008,7 +1036,7 @@ const Planner = (() => {
     };
   }
 
-  return { plan, search, extend, visible, suggest, stopAbbr, alternatives, followUpSearch };
+  return { plan, search, extend, visible, suggest, stopAbbr, shortName, alternatives, followUpSearch };
 })();
 
 // ---------- Stations: recent + favorites, persisted in localStorage ----------
@@ -1087,13 +1115,13 @@ function labelled(cls, from, to, t0, t1, texts, title) {
   return span;
 }
 
-// Bubble above the bar for a stop. `align`: where the tip sits (see CSS).
-// Text is chosen by fitPins(): full name if there is room, else abbreviation.
-function stopPin(name, at, align, t0, t1) {
+// Bubble above the bar for a stop, anchored at `at`. Text, row and exact
+// position are chosen by fitPins() once the bar is laid out.
+function stopPin(name, at, t0, t1) {
   const pin = document.createElement("span");
-  pin.className = `pin ${align}`;
-  pin.style.left = `${((at - t0) / (t1 - t0 || 1)) * 100}%`;
-  pin.dataset.texts = JSON.stringify([...new Set([name, Planner.stopAbbr(name)])]);
+  pin.className = "pin";
+  pin.dataset.frac = String((at - t0) / (t1 - t0 || 1));
+  pin.dataset.texts = JSON.stringify([...new Set([Planner.shortName(name), Planner.stopAbbr(name)])]);
   pin.title = name;
   return pin;
 }
@@ -1111,37 +1139,94 @@ function edgeWalkPins(j, t0, t1) {
   const first = j.legs[0];
   const last = j.legs[j.legs.length - 1];
   if (first.kind === LegKind.WALK) {
-    pins.push(stopPin(rides[0].from, rides[0].dep, "", t0, t1));
+    pins.push(stopPin(rides[0].from, rides[0].dep, t0, t1));
   }
   if (last.kind === LegKind.WALK) {
     const r = rides[rides.length - 1];
-    pins.push(stopPin(r.to, r.arr, "", t0, t1));
+    pins.push(stopPin(r.to, r.arr, t0, t1));
   }
   return pins;
 }
 
 const PIN_GAP_PX = 3;
+const PIN_ROWS = 2;
+// Tip must stay this far inside the bubble (rounded corners).
+const PIN_TIP_INSET_PX = 6;
 
-// Per bar: longest text form that lets no two bubbles overlap, same form for
-// all bubbles of the bar so they read consistently. Zooming in gives room.
+// Places bubbles left to right. A bubble slides sideways as far as its tip
+// stays over the stop; it goes to the lowest row with room, else fails.
+//
+//   tip range:   [anchor - w + inset, anchor - inset]
+//   bar range:   [0, barW - w]
+//   row range:   [rowEnd + gap, ∞)
+//
+//                 ┌───────────┐          row 1 (only if row 0 is full)
+//   ┌────────┐┌───┤  Zürich HB│──┐
+//   │ Selnau ││Wal│           │Fu│       row 0: slid right to free space
+//   ═══╧═════════╧═══════╧═══════╧════   bar  (╧ = tip = stop)
+// Returns [{ pin, left, row }] or null when PIN_ROWS rows don't suffice.
+function placePins(pins, barW) {
+  const items = pins
+    .map((pin) => ({ pin, w: pin.offsetWidth, anchor: Number(pin.dataset.frac) * barW }))
+    .sort((a, b) => a.anchor - b.anchor);
+
+  const rowEnd = [];
+  const placed = [];
+  for (const it of items) {
+    const minLeft = Math.max(0, it.anchor - it.w + PIN_TIP_INSET_PX);
+    // Stop right at a bar edge: bubble hugs the edge, tip sits in its corner.
+    const maxLeft = Math.max(minLeft, Math.min(barW - it.w, it.anchor - PIN_TIP_INSET_PX));
+
+    let row = rowEnd.findIndex((end) => end + PIN_GAP_PX <= maxLeft);
+    if (row === -1) {
+      row = rowEnd.length;
+    }
+    if (row >= PIN_ROWS) {
+      return null;
+    }
+
+    const left = Math.max(minLeft, (rowEnd[row] ?? -Infinity) + PIN_GAP_PX);
+    rowEnd[row] = left + it.w;
+    const tip = Math.min(it.w - PIN_TIP_INSET_PX, Math.max(PIN_TIP_INSET_PX, it.anchor - left));
+    placed.push({ pin: it.pin, left, row, tip });
+  }
+  return placed;
+}
+
+// Per bar: longest text form that placePins() can lay out, same form for
+// all bubbles of the bar so they read consistently. Full names on two rows
+// beat abbreviations on one. Zooming in gives room.
 function fitPins(root) {
   root.querySelectorAll(".bar").forEach((bar) => {
     const pins = [...bar.querySelectorAll(".pin")];
     if (!pins.length) {
       return;
     }
+    const barW = bar.clientWidth;
     const forms = pins.map((p) => JSON.parse(p.dataset.texts));
     const levels = Math.max(...forms.map((f) => f.length));
-    for (let lvl = 0; lvl < levels; lvl++) {
+
+    let placed = null;
+    for (let lvl = 0; lvl < levels && !placed; lvl++) {
       pins.forEach((p, i) => {
         p.textContent = forms[i][Math.min(lvl, forms[i].length - 1)];
       });
-      const rects = pins.map((p) => p.getBoundingClientRect()).sort((a, b) => a.left - b.left);
-      const overlap = rects.some((r, i) => i > 0 && rects[i - 1].right + PIN_GAP_PX > r.left);
-      if (!overlap) {
-        return;
-      }
+      placed = placePins(pins, barW);
     }
+
+    // Nothing fits even abbreviated: tips on the stops, single row, overlap.
+    placed ||= pins.map((pin) => {
+      const w = pin.offsetWidth;
+      const left = Number(pin.dataset.frac) * barW - w / 2;
+      return { pin, left, row: 0, tip: w / 2 };
+    });
+
+    placed.forEach(({ pin, left, row, tip }) => {
+      pin.style.left = `${left}px`;
+      pin.style.setProperty("--tip", `${tip}px`);
+      pin.classList.toggle("up", row > 0);
+    });
+    bar.closest(".track")?.classList.toggle("two-rows", placed.some((p) => p.row > 0));
   });
 }
 
@@ -1212,22 +1297,15 @@ function renderJourney(j, t0, t1, scale, past) {
     ...(j.legs.length
       ? j.legs.map(legSeg).filter(Boolean)
       : [labelled("transit", j.transitStart, j.transitEnd, t0, t1, [j.lines], j.lines)]),
-    stopPin(j.from, j.transitStart, "start", t0, t1),
+    stopPin(j.from, j.transitStart, t0, t1),
     ...edgeWalkPins(j, t0, t1),
     ...j.transfers.map((x) =>
-      stopPin(x.stop, new Date((x.from.getTime() + x.to.getTime()) / 2), "", t0, t1)
+      stopPin(x.stop, new Date((x.from.getTime() + x.to.getTime()) / 2), t0, t1)
     ),
-    stopPin(j.to, j.transitEnd, "end", t0, t1)
+    stopPin(j.to, j.transitEnd, t0, t1)
   );
 
   li.append(times, track);
-
-  if (j.transfers.length) {
-    const xfer = document.createElement("div");
-    xfer.className = "meta";
-    xfer.textContent = `Umsteigen: ${j.transfers.map((x) => x.stop).join(", ")}`;
-    li.append(xfer);
-  }
 
   // Click toggles the leg-by-leg detail.
   const details = renderDetails(j);

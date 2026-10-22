@@ -503,3 +503,58 @@ Bei «Nach Hause» nennt die erste Meta-Zeile die Suchhaltestelle; klingt wie de
 
 - Meta-Zeile «Haltestelle · Linien · + Fussweg» entfernt. Linien stehen im Balken, Fussweg ist gepunktet sichtbar.
 - `edgeWalkPins()`: Fussweg am fernen Ende → zusätzliche Blase am Start der ersten bzw. Ende der letzten Fahrt. Fusswege zwischen Fahrten waren schon als Umsteigen gepinnt.
+
+---
+
+## User
+
+Sprechblasen auf zwei Zeilen verteilen, damit sie nicht überlappen? Ausprobieren.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- `assignRows()`: Blasen von links nach rechts greedy auf max. 2 Zeilen verteilen.
+- `fitPins()` probiert pro Textform (voll, dann Abkürzung) die Zeilenzuteilung; volle Namen auf zwei Zeilen schlagen Abkürzungen auf einer.
+- Obere Zeile: `.pin.up`, dünne Linie bis zum Balken. `.track.two-rows` reserviert den Platz nur bei Karten, die ihn brauchen.
+- Ungetestet im Browser.
+
+## User
+
+Horizontalen Platz besser nutzen, bevor eine zweite Zeile kommt (z. B. rechts neben «WFurtb» ist frei).
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- `placePins()`: Blase darf seitlich rutschen, solange die Spitze über der Haltestelle bleibt (`--tip`) und die Blase im Balken. Reihenfolge: zuerst rutschen, erst dann zweite Zeile, erst dann Abkürzung.
+- Start/End-Ausrichtung (`.pin.start`/`.pin.end`) entfällt; Blase am Balkenrand hängt an der Ecke.
+- `placePins()` ohne DOM getestet (drei Fälle); Browser nicht.
+
+## User
+
+Umsteigen-Zeile: Icon, dann alle Orte, wo etwas passiert (z. B. Zürich HB, Wallisellen Bahnhof, Wallisellen Furtbach). Namen kürzen, in Blasen und Zeile: Furtbach, Dietlikon, Oerlikon, HB, Selnau.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- `Planner.shortName()`: Ort weg, wenn ein eigener Teil bleibt; «Bahnhof …» und «(…)» weg. Blasen: kurz → Abkürzung. Zeile: `⇄ HB · Wallisellen · Furtbach`.
+- `changeStops()`: jede Grenze zwischen Abschnitten inkl. Heimweg, ohne Start und Ziel. Kurzer Umsteige-Fussweg A → B zählt als ein Ort (A).
+- Bekannte Schwäche (wie `stopAbbr`): «Bad Ragaz» → «Ragaz», «St. Gallen» → «Gallen».
+
+## User
+
+Die Umsteigen-Zeile braucht es gar nicht mehr.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Zeile, `changeStops()` und Icon entfernt. Karte: Zeiten, Balken mit Blasen, Details auf Klick. `shortName()` bleibt für die Blasen.
+
+## User
+
+«Zürich Oerlikon» steht weiterhin zweiwortig in der Blase. Name laut Details: «Zürich Oerlikon, Bahnhof Ost».
+
+## Claude
+
+Ort vor dem Komma war selbst zweiteilig; nach Wegfall von «Bahnhof Ost» blieb der ganze Ort. `shortName()` kürzt den Ort dann auf alles nach dem ersten Wort → «Oerlikon».
