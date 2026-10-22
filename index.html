@@ -168,6 +168,7 @@ li.clickable { cursor: pointer; }
 .legs tr:last-child td { border-bottom: 0; }
 .legs .tm { white-space: nowrap; font-weight: 700; width: 2.8rem; }
 .legs .tm.end { text-align: right; }
+.legs .delay { color: var(--bad); font-size: .75rem; }
 .legs .stop { overflow-wrap: anywhere; }
 .legs .gl { display: block; color: var(--muted); font-size: .75rem; }
 .legs .ln { white-space: nowrap; width: 2.6rem; }
@@ -443,21 +444,35 @@ const TransportApi = (() => {
     return sec < TRANSFER_WALK_MAX_MIN * 60 ? LegKind.CHANGE : LegKind.WALK;
   }
 
+  // Live time of a stop event when the API has a prognosis, else schedule.
+  // The API plans with live data but the *Timestamp fields are schedule, so
+  // mixing them makes a late bus seem to leave before we arrive.
+  //   { departureTimestamp: 17:53, prognosis: { departure: "…18:02" } }
+  //   → { at: 18:02, delayMin: 9 }
+  function liveTime(ev, which) {
+    const sched = new Date(ev[`${which}Timestamp`] * MS_PER_SEC);
+    const prog = ev.prognosis?.[which] ? new Date(ev.prognosis[which]) : null;
+    const at = prog && !Number.isNaN(prog.getTime()) ? prog : sched;
+    return { at, delayMin: Math.round((at - sched) / MS_PER_MIN) };
+  }
+
   // One section as a leg: ride (with line), real walk, or short change walk.
   function toLeg(s) {
     const j = s.journey;
-    const dep = new Date(s.departure.departureTimestamp * MS_PER_SEC);
-    const arr = new Date(s.arrival.arrivalTimestamp * MS_PER_SEC);
-    const walkSec = s.walk?.duration ?? Math.round((arr - dep) / MS_PER_SEC);
+    const dep = liveTime(s.departure, "departure");
+    const arr = liveTime(s.arrival, "arrival");
+    const walkSec = s.walk?.duration ?? Math.round((arr.at - dep.at) / MS_PER_SEC);
     return {
       kind: j ? LegKind.RIDE : walkKind(walkSec),
       line: j ? lineLabel(j) : "",
       headsign: j?.to || "",
       from: s.departure.station.name,
-      dep,
+      dep: dep.at,
+      depDelayMin: dep.delayMin,
       platform: s.departure.platform || "",
       to: s.arrival.station.name,
-      arr,
+      arr: arr.at,
+      arrDelayMin: arr.delayMin,
       walkSec,
       tripId: j?.name || "",
       stops: (j?.passList || []).map((p) => p.station?.name).filter(Boolean),
@@ -471,8 +486,8 @@ const TransportApi = (() => {
     return {
       from: c.from.station.name,
       to: c.to.station.name,
-      dep: new Date(c.from.departureTimestamp * MS_PER_SEC),
-      arr: new Date(c.to.arrivalTimestamp * MS_PER_SEC),
+      dep: liveTime(c.from, "departure").at,
+      arr: liveTime(c.to, "arrival").at,
       lines: (rideLines.length ? rideLines : c.products || []).join(", "),
       transfers: toTransfers(legs),
       legs,
@@ -555,10 +570,12 @@ const TransportApi = (() => {
           line: lineLabel(e),
           headsign: e.to || "",
           from: e.stop.station?.name || station,
-          dep: new Date(e.stop.departureTimestamp * MS_PER_SEC),
+          dep: liveTime(e.stop, "departure").at,
+          depDelayMin: liveTime(e.stop, "departure").delayMin,
           platform: e.stop.platform || "",
           to: target,
-          arr: new Date(stopAt.arrivalTimestamp * MS_PER_SEC),
+          arr: liveTime(stopAt, "arrival").at,
+          arrDelayMin: liveTime(stopAt, "arrival").delayMin,
           walkSec: 0,
           tripId: e.name || "",
           stops: (e.passList || []).map((p) => p.station?.name).filter(Boolean),
@@ -1416,8 +1433,21 @@ function legRow(l) {
     });
   }
 
-  tr.append(cell("tm", hhmm(l.dep)), from, ln, dir, cell("stop", l.to), cell("tm end", hhmm(l.arr)));
+  tr.append(timeCell("tm", l.dep, l.depDelayMin), from, ln, dir, cell("stop", l.to), timeCell("tm end", l.arr, l.arrDelayMin));
   return tr;
+}
+
+// Time with the delay against schedule when there is one: "18:02 +9".
+function timeCell(cls, at, delayMin) {
+  const td = cell(cls, hhmm(at));
+  if (delayMin) {
+    const d = document.createElement("span");
+    d.className = "delay";
+    d.textContent = `${delayMin > 0 ? "+" : ""}${delayMin}`;
+    d.title = "Minuten gegenüber Fahrplan";
+    td.append(" ", d);
+  }
+  return td;
 }
 
 // Button per transfer; loads and toggles the alternatives below it.

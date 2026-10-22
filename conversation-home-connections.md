@@ -659,3 +659,20 @@ Fussgänger-Filter als x/y (5 von 8 Verbindungen).
 ## Claude
 
 *(Aktualisiert `index.html`.)* Zeile: `Mit zusätzlichem Fussweg (3/8)` = mit Fussweg / alle, die die Grenzen passieren. Immer angezeigt, auch 0/8.
+
+---
+
+## User
+
+Verbindung 17:48–17:55 (7 Min.): Bus 62 fährt 17:53 ab Aubrücke, 787 kommt dort 18:02 an. Was ist das?
+
+## Claude
+
+API-Daten unverändert übernommen. Vermutung: API plant mit Echtzeit, die `*Timestamp`-Felder sind Fahrplan; der 62 ist verspätet. Auf Nachfrage umgesetzt:
+
+*(Aktualisiert `index.html`.)*
+
+- `liveTime(ev, which)`: `prognosis.departure/arrival` (ISO) wenn vorhanden, sonst Fahrplan; liefert `{ at, delayMin }`.
+- Abschnitte, Verbindung (`c.from`/`c.to`) und Zubringer-Abfahrtstafel nutzen Live-Zeiten. Alle abgeleiteten Zeiten (Balken, Umsteigen, Sortierung, Dauer) folgen.
+- Details: Zeit mit Abweichung «18:02 +9» in Rot.
+- Unsicher: Feldname/Format der Prognose aus dem Gedächtnis (`prognosis.departure` als ISO-String). Ungültige Werte fallen auf Fahrplan zurück.
