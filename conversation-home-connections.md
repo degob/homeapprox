@@ -676,3 +676,33 @@ API-Daten unverändert übernommen. Vermutung: API plant mit Echtzeit, die `*Tim
 - Abschnitte, Verbindung (`c.from`/`c.to`) und Zubringer-Abfahrtstafel nutzen Live-Zeiten. Alle abgeleiteten Zeiten (Balken, Umsteigen, Sortierung, Dauer) folgen.
 - Details: Zeit mit Abweichung «18:02 +9» in Rot.
 - Unsicher: Feldname/Format der Prognose aus dem Gedächtnis (`prognosis.departure` als ISO-String). Ungültige Werte fallen auf Fahrplan zurück.
+
+---
+
+## User
+
+Im Filterbereich alle Bus- und S-Bahn-Linien der Resultate anzeigen; Klick filtert auf Verbindungen mit dieser Linie. Mehrere Linien = beliebige davon.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Vierte Zeile: `🚌 [S8] [S19] [T12] [62] [787] ↺`. Chips aus den Verbindungen, die alle anderen Filter passieren; gewählte Chips bleiben, auch wenn ihre Linie verschwunden ist. Tooltip: Anzahl Verbindungen.
+- `LineFilter`: Menge gewählter Linien, ODER-Verknüpfung. Reihenfolge: Buchstaben-Linien (S, T, IR) zuerst, dann numerisch.
+- Klammer-Hinweise und Fussweg-Zähler berücksichtigen den Linienfilter. Neue Suche setzt zurück.
+
+## User
+
+Linienfilter zuunterst, eingeklappt starten.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Reihenfolge: Dauer, Umsteigen, Fussweg, Linien. Eingeklappt: «Linien (2 gewählt) ▸», Klick auf Text oder ▸ klappt auf; ▾ klappt zu. Zustand `linesOpen` bleibt über Renders, neue Suche klappt zu. Filter wirkt auch eingeklappt; ↺ sichtbar.
+
+## User
+
+↺ der Linien in dieselbe Spalte wie bei den anderen Filtern.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Linien-↺ in die vierte Grid-Spalte.

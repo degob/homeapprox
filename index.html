@@ -131,6 +131,13 @@ button.more:disabled { opacity: .6; cursor: default; }
 .meta { color: var(--muted); font-size: .95rem; }
 li.clickable { cursor: pointer; }
 #summary .toggle { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
+#summary .chips { flex-wrap: wrap; gap: .3rem; white-space: normal; }
+.chip {
+  font-size: .8rem; font-weight: 700; padding: .05rem .5rem; border-radius: 999px;
+  background: var(--surface); color: var(--transit); border: 1px solid var(--transit);
+}
+.chip.on { background: var(--transit); color: var(--bg); }
+.caret { background: none; color: var(--muted); padding: 0 .3rem; font-size: 1rem; line-height: 1; }
 #summary .toggle input { margin: 0; accent-color: var(--transit); }
 .details { margin-top: .5rem; padding: .5rem 0 0; border-top: 1px solid var(--line); font-size: .95rem; cursor: default; }
 .alt-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 0 .4rem; }
@@ -1703,6 +1710,7 @@ const CUT_ICON = "✂";
 const RESET_ICON = "↺";
 const DURATION_ICON = "⏱";
 const WALK_ICON = "🚶";
+const LINES_ICON = "🚌";
 const CHANGES_ICON = "⇄";
 const DURATION_CUT_STEP_MIN = 5;
 // Share of journeys kept when jumping straight to the best value.
@@ -1753,6 +1761,29 @@ const Caps = (() => {
   return { apply, canCut, cut, cutToBest, reset, resetAll, active };
 })();
 
+// Lines picked in the summary; a journey passes when it rides any of them.
+const LineFilter = (() => {
+  const picked = new Set();
+  const linesOf = (j) => j.legs.filter((l) => l.kind === LegKind.RIDE).map((l) => l.line);
+
+  const apply = (journeys) =>
+    picked.size ? journeys.filter((j) => linesOf(j).some((l) => picked.has(l))) : journeys;
+  const toggle = (line) => { picked.has(line) ? picked.delete(line) : picked.add(line); };
+  const clear = () => picked.clear();
+  const active = () => picked.size > 0;
+  const has = (line) => picked.has(line);
+
+  // Lines to offer: all ridden in `journeys`, plus picked ones no longer
+  // present (so they can be unpicked). Trains first, then natural order.
+  function offer(journeys) {
+    const all = new Set([...picked, ...journeys.flatMap(linesOf)]);
+    const rank = (l) => (/^[A-Z]/.test(l) ? 0 : 1);
+    return [...all].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b, "de", { numeric: true }));
+  }
+
+  return { apply, toggle, clear, active, has, offer, linesOf };
+})();
+
 function iconButton(icon, title, onClick) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -1768,7 +1799,7 @@ function iconButton(icon, title, onClick) {
 // out of all that pass the caps.
 //   🚶  Mit zusätzlichem Fussweg (3/8)        [x]
 function walkRow(everything) {
-  const capped = Caps.apply(everything);
+  const capped = LineFilter.apply(Caps.apply(everything));
   const n = capped.filter((j) => j.hasExtraWalk).length;
   const icon = document.createElement("span");
   icon.className = "icon";
@@ -1785,6 +1816,62 @@ function walkRow(everything) {
   return [icon, label, slot, document.createElement("span")];
 }
 
+// Last summary row: collapsed, "Linien" plus how many are picked; expanded,
+// one chip per line in the shown journeys, picked chips filled.
+// `others` = journeys passing every other filter.
+//   🚌  Linien (2 gewählt) ▸                     ↺
+//   🚌  [S8] [S19] [62] [787] ▾                  ↺
+let linesOpen = false;
+
+function linesRow(others) {
+  const icon = document.createElement("span");
+  icon.className = "icon";
+  icon.textContent = LINES_ICON;
+  icon.title = "Linien";
+
+  const chips = document.createElement("span");
+  chips.className = "range chips";
+  const caret = document.createElement("button");
+  caret.type = "button";
+  caret.className = "caret";
+  caret.textContent = linesOpen ? "▾" : "▸";
+  caret.title = linesOpen ? "Linien einklappen" : "Linien anzeigen";
+  caret.setAttribute("aria-expanded", String(linesOpen));
+  caret.addEventListener("click", () => { linesOpen = !linesOpen; render(); });
+
+  if (!linesOpen) {
+    const n = LineFilter.offer(others).filter(LineFilter.has).length;
+    const label = document.createElement("span");
+    label.className = "jump";
+    label.textContent = n ? `Linien (${n} gewählt)` : "Linien";
+    label.addEventListener("click", () => { linesOpen = true; render(); });
+    chips.append(label, caret);
+  }
+
+  linesOpen && LineFilter.offer(others).forEach((line) => {
+    const n = others.filter((j) => LineFilter.linesOf(j).includes(line)).length;
+    const chip = document.createElement("button");
+    chip.type = "button";
+    chip.className = LineFilter.has(line) ? "chip on" : "chip";
+    chip.textContent = line;
+    chip.title = `${n} Verbindung${n === 1 ? "" : "en"}`;
+    chip.setAttribute("aria-pressed", String(LineFilter.has(line)));
+    chip.addEventListener("click", () => { LineFilter.toggle(line); render(); });
+    chips.append(chip);
+  });
+  if (linesOpen) {
+    chips.append(caret);
+  }
+
+  // Reset in the last column, aligned with the other rows' ↺.
+  const slot = document.createElement("span");
+  slot.className = "slot";
+  if (LineFilter.active()) {
+    slot.append(iconButton(RESET_ICON, "Filter aufheben", () => { LineFilter.clear(); render(); }));
+  }
+  return [icon, chips, document.createElement("span"), slot];
+}
+
 // Summary grid, one row per measure: icon | range | ✂ ↺ (right-aligned,
 // slots kept so nothing jumps when a button appears).
 //   ⏱  [31 Min.] – [52 Min.]        ✂  ↺
@@ -1797,15 +1884,17 @@ function renderSummary(journeys, all, everything) {
   if (!everything.length) {
     return;
   }
-  box.append(...walkRow(everything));
+  // Order: duration, changes, walk, lines (collapsed by default).
+  const tail = [...walkRow(everything), ...linesRow(Caps.apply(all))];
   if (!journeys.length) {
+    box.append(...tail);
     return;
   }
   const scale = durationScale(all);
   const { best, worst } = durationScale(journeys);
   // What each cap alone hides: other filters applied, this one left out.
-  const worstButDur = durationScale(Caps.apply(all, CapKind.DURATION)).worst;
-  const maxCButChg = Math.max(...Caps.apply(all, CapKind.CHANGES).map(changesOf));
+  const worstButDur = durationScale(LineFilter.apply(Caps.apply(all, CapKind.DURATION))).worst;
+  const maxCButChg = Math.max(...LineFilter.apply(Caps.apply(all, CapKind.CHANGES)).map(changesOf));
 
   const pill = (min) => {
     const p = document.createElement("span");
@@ -1871,7 +1960,8 @@ function renderSummary(journeys, all, everything) {
           clickable(text(String(maxC)), "Meiste weglassen", cutOne(CapKind.CHANGES)),
           "× umsteigen",
         ]),
-      ...hint(CapKind.CHANGES, maxC, maxCButChg, "×"))
+      ...hint(CapKind.CHANGES, maxC, maxCButChg, "×")),
+    ...tail
   );
 }
 
@@ -1910,7 +2000,7 @@ function render() {
   const { failed } = lastResult;
   const everything = Planner.visible(lastResult, WalkMode.SHOW);
   const all = Planner.visible(lastResult, walkMode());
-  const journeys = Caps.apply(all);
+  const journeys = LineFilter.apply(Caps.apply(all));
 
   renderSummary(journeys, all, everything);
   const status = $("status");
@@ -2201,6 +2291,8 @@ async function onSubmit(e) {
   $("status").textContent = "Suche …";
   lastResult = null;
   Caps.resetAll();
+  LineFilter.clear();
+  linesOpen = false;
   render();
 
   try {
