@@ -721,3 +721,11 @@ Mehrere Ziele eingeben können; Routen zu allen. (Rückfrage: Chips; nur Ziel, n
 - `Planner.plan(places, …)` plant pro Ziel (`planOne`) parallel, mischt, sortiert nach Abfahrt. `params.places` für Frühere/Spätere. Fehlermeldungen bei mehreren Zielen mit Ziel-Präfix.
 - «Neue Suche ab …» setzt genau ein Ziel.
 - Nicht übergreifend geprunt: Verbindungen zu verschiedenen Zielen konkurrieren nicht.
+
+## User
+
+GitHub-Test rot: `places.map is not a function`.
+
+## Claude
+
+Tests rufen `Planner.plan("Bern", …)` mit einem String. `plan()` nimmt jetzt String oder Liste (`[].concat`). 57/57 grün.

@@ -884,9 +884,10 @@ const Planner = (() => {
   }
 
   // `origin` only for Direction.OTHER.
-  // Several destinations: plan each, merge, order by departure. Failures
+  // One place or several: plan each, merge, order by departure. Failures
   // are labelled with the place when there is more than one.
-  async function plan(places, at, dir, timeRef, origin) {
+  async function plan(placeOrPlaces, at, dir, timeRef, origin) {
+    const places = [].concat(placeOrPlaces);
     const settled = await Promise.allSettled(places.map((p) => planOne(p, at, dir, timeRef, origin)));
     const failed = [];
     let journeys = [];
