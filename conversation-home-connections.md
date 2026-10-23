@@ -759,3 +759,14 @@ Ja → Schritt 2.
 - Panel «⌂ Orte» unter dem Formular (`<details>`, zu): Liste mit ✎/×, Formular Name + Haltestellen-Zeilen (Text mit `<datalist>`-Vorschlägen ab 3 Zeichen, Minuten) + Haltestelle, Speichern, Abbrechen.
 - Vorschläge: Gruppe «Orte» zuerst, mit ⌂; kein Stern bei Orten. Chips zeigen ⌂. Suche löst Namen über `Places.resolve` auf, auch «Von».
 - 65/65 Tests, 3 neu.
+
+## User
+
+«Orte» direkt unter dem Ort-Feld. In den Resultaten eine Blase mit dem Ortsnamen am Start bzw. Ende.
+
+## Claude
+
+*(Aktualisiert `index.html`.)*
+
+- Panel ins Suchformular, direkt nach dem Ort-Feld. Innerer `<form>` → `<div>` (keine verschachtelten Formulare); Enter im Editor speichert den Ort, nicht die Suche.
+- Grüne Blase `.pin.place` mit dem Ortsnamen (Zuhause, Büro …) am Start, wenn `walkStartMin`, bzw. am Ende, wenn `walkEndMin`. Nimmt an der Blasen-Verteilung teil.

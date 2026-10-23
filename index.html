@@ -132,13 +132,13 @@ button.more:disabled { opacity: .6; cursor: default; }
 li.clickable { cursor: pointer; }
 #summary .toggle { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
 #summary .chips { flex-wrap: wrap; gap: .3rem; white-space: normal; }
-.places { margin: .9rem 0 0; color: var(--muted); font-size: .95rem; }
+.places { margin: -.4rem 0 0; color: var(--muted); font-size: .95rem; }
 .places summary { cursor: pointer; }
 .places ul { list-style: none; padding: 0; margin: .5rem 0; }
 .places li { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; border-bottom: 1px solid var(--line); }
 .places li .pname { color: var(--ink); font-weight: 700; }
 .places li .pstops { flex: 1; overflow-wrap: anywhere; }
-.places form { display: grid; gap: .5rem; margin-top: .5rem; }
+.places #place-form { display: grid; gap: .5rem; margin-top: .5rem; }
 .places .stop-row { display: flex; gap: .4rem; align-items: center; }
 .places .stop-row input[type=text] { flex: 1; min-width: 0; }
 .places .stop-row input[type=number] { width: 4.5rem; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .4rem; }
@@ -249,6 +249,10 @@ button.ghost { background: var(--surface); color: var(--transit); border: 1px so
   content: ""; position: absolute; left: var(--tip, 50%); top: 100%; margin-left: -4px;
   border: 4px solid transparent; border-top-color: var(--muted);
 }
+/* Custom place (Zuhause, Büro …) at a journey's start or end: green. */
+.bar .pin.place { background: var(--walk); }
+.bar .pin.place::after { border-top-color: var(--walk); }
+.bar .pin.place::before { background: var(--walk); }
 /* Second bubble row, used when names would overlap in one row. A thin line
    connects the raised bubble down to the bar. */
 .track { --pin-row: 1.35rem; }
@@ -324,6 +328,23 @@ button.ghost { background: var(--surface); color: var(--transit); border: 1px so
     <div id="dests" class="dests"></div>
   </div>
 
+  <!-- Custom places: name + stops with walk minutes. Collapsed by default. -->
+  <details id="places-panel" class="places">
+    <summary>⌂ Orte</summary>
+    <ul id="places-list"></ul>
+    <div id="place-form">
+      <input type="text" id="pf-name" placeholder="Name, z. B. Büro">
+      <div id="pf-stops"></div>
+      <div class="row">
+        <button type="button" id="pf-add" class="ghost">+ Haltestelle</button>
+        <button type="button" id="pf-save">Speichern</button>
+        <button type="button" id="pf-cancel" class="ghost" hidden>Abbrechen</button>
+      </div>
+      <p id="pf-error" class="error" role="alert"></p>
+    </div>
+    <datalist id="stop-options"></datalist>
+  </details>
+
   <div class="row">
     <div class="seg" role="radiogroup" aria-label="Zeitbezug">
       <input type="radio" name="ref" id="r-dep" value="depart" checked><label for="r-dep">Ab</label>
@@ -335,23 +356,6 @@ button.ghost { background: var(--surface); color: var(--transit); border: 1px so
   </div>
 
 </form>
-
-<!-- Custom places: name + stops with walk minutes. Collapsed by default. -->
-<details id="places-panel" class="places">
-  <summary>⌂ Orte</summary>
-  <ul id="places-list"></ul>
-  <form id="place-form" autocomplete="off">
-    <input type="text" id="pf-name" placeholder="Name, z. B. Büro">
-    <div id="pf-stops"></div>
-    <div class="row">
-      <button type="button" id="pf-add" class="ghost">+ Haltestelle</button>
-      <button type="submit">Speichern</button>
-      <button type="button" id="pf-cancel" class="ghost" hidden>Abbrechen</button>
-    </div>
-    <p id="pf-error" class="error" role="alert"></p>
-  </form>
-  <datalist id="stop-options"></datalist>
-</details>
 
 <!-- Walk toggle; render() moves it into the summary's third row. -->
 <input type="checkbox" id="walk" checked hidden aria-label="Verbindungen mit zusätzlichem Fussweg zeigen">
@@ -1361,9 +1365,9 @@ function labelled(cls, from, to, t0, t1, texts, title) {
 
 // Bubble above the bar for a stop, anchored at `at`. Text, row and exact
 // position are chosen by fitPins() once the bar is laid out.
-function stopPin(name, at, t0, t1) {
+function stopPin(name, at, t0, t1, cls = "") {
   const pin = document.createElement("span");
-  pin.className = "pin";
+  pin.className = `pin ${cls}`;
   pin.dataset.frac = String((at - t0) / (t1 - t0 || 1));
   pin.dataset.texts = JSON.stringify([...new Set([Planner.shortName(name), Planner.stopAbbr(name)])]);
   pin.title = name;
@@ -1543,12 +1547,14 @@ function renderJourney(j, t0, t1, scale, past) {
     ...(j.legs.length
       ? j.legs.map(legSeg).filter(Boolean)
       : [labelled("transit", j.transitStart, j.transitEnd, t0, t1, [j.lines], j.lines)]),
+    ...(j.walkStartMin ? [stopPin(j.fromPlace, j.start, t0, t1, "place")] : []),
     stopPin(j.from, j.transitStart, t0, t1),
     ...edgeWalkPins(j, t0, t1),
     ...j.transfers.map((x) =>
       stopPin(x.stop, new Date((x.from.getTime() + x.to.getTime()) / 2), t0, t1)
     ),
-    stopPin(j.to, j.transitEnd, t0, t1)
+    stopPin(j.to, j.transitEnd, t0, t1),
+    ...(j.walkEndMin ? [stopPin(j.toPlace, j.end, t0, t1, "place")] : [])
   );
 
   li.append(times, track);
@@ -2037,8 +2043,7 @@ const PlacesEditor = (() => {
     });
   }
 
-  function onSave(e) {
-    e.preventDefault();
+  function onSave() {
     try {
       Places.put(readForm(), editing ?? undefined);
     } catch (err) {
@@ -2052,7 +2057,14 @@ const PlacesEditor = (() => {
   function init() {
     renderList();
     showForm(null);
-    $("place-form").addEventListener("submit", onSave);
+    $("pf-save").addEventListener("click", onSave);
+    // Enter inside the editor saves the place, not the search form.
+    $("place-form").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        onSave();
+      }
+    });
     $("pf-add").addEventListener("click", () => $("pf-stops").append(stopRow()));
     $("pf-cancel").addEventListener("click", () => showForm(null));
   }
