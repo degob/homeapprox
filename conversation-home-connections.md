@@ -770,3 +770,21 @@ Ja → Schritt 2.
 
 - Panel ins Suchformular, direkt nach dem Ort-Feld. Innerer `<form>` → `<div>` (keine verschachtelten Formulare); Enter im Editor speichert den Ort, nicht die Suche.
 - Grüne Blase `.pin.place` mit dem Ortsnamen (Zuhause, Büro …) am Start, wenn `walkStartMin`, bzw. am Ende, wenn `walkEndMin`. Nimmt an der Blasen-Verteilung teil.
+
+---
+
+## User
+
+Alternativen: ± soll die Abfahrt gegenüber meiner Ankunft am Umsteigeort zeigen (15:11 an, T7 15:07 → −4, 15:15 → «geplant +4», 15:22 → +11), nicht die Ankunft am Ziel.
+
+## Claude
+
+*(Aktualisiert `index.html`, Test.)* Alternative hat `wait` (Abfahrt − meine Ankunft) und weiter `delta` (Ankunft am Ziel vs. geplant). Zeile zeigt `wait`: «−4 Min.», «geplant +4», «+11 Min.». `delta` bleibt im aufgeklappten Detail («… später als geplant»). Legende angepasst.
+
+## User
+
+«Orte» verstecken; nur sichtbar nach Klick auf ein Zahnrad oben rechts.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Kopfzeile mit Titel und ⚙ (`#settings`, `aria-expanded`). Panel `#places-panel` als Karte unter der Kopfzeile, `hidden` bis zum Klick; Zahnrad färbt sich bei offenem Panel. Schritt 3 (Export/Import/URL) kommt später in dieselbe Karte.

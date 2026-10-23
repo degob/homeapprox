@@ -485,11 +485,12 @@ describe("alternatives", () => {
     const { journeys } = await app.Planner.plan("Rigi Kulm", at(10, 0), "fromHome", "depart");
     const j = journeys.find((x) => x.homeStop === "Wallisellen, Furtbach");
     const alts = await app.Planner.alternatives(j, j.transfers[0]);
-    assert.deepEqual([...alts.map((a) => [hm(a.trip.dep), a.rel, a.delta])], [
-      ["10:09", "earlier", -30],
-      ["10:24", "earlier", -15],
-      ["10:39", "planned", 0],
-      ["10:54", "later", 45],
+    // wait: departure vs. my arrival at the stop (10:26); delta: arrival at the destination vs. planned.
+    assert.deepEqual([...alts.map((a) => [hm(a.trip.dep), a.rel, a.wait, a.delta])], [
+      ["10:09", "earlier", -17, -30],
+      ["10:24", "earlier", -2, -15],
+      ["10:39", "planned", 13, 0],
+      ["10:54", "later", 28, 45],
     ]);
     const times = app.requests.filter((r) => r.path === "connections").map((r) => r.params.get("time"));
     assert.ok(times.includes("10:06")); // earlier ones: arrival 10:26 − 20 min

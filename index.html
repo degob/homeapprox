@@ -55,7 +55,10 @@ body {
   font-variant-numeric: tabular-nums;
 }
 main { max-width: 42rem; margin: 0 auto; padding: 1.5rem .75rem 3rem; }
-h1 { font-size: 1.6rem; margin: 0 0 1.25rem; }
+.top { display: flex; align-items: center; justify-content: space-between; margin: 0 0 1.25rem; }
+h1 { font-size: 1.6rem; margin: 0; }
+.gear { background: none; color: var(--muted); font-size: 1.4rem; padding: 0 .2rem; line-height: 1; }
+.gear[aria-expanded="true"] { color: var(--transit); }
 
 form { display: grid; gap: .9rem; }
 .row { display: flex; flex-wrap: wrap; gap: .6rem; }
@@ -132,8 +135,11 @@ button.more:disabled { opacity: .6; cursor: default; }
 li.clickable { cursor: pointer; }
 #summary .toggle { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
 #summary .chips { flex-wrap: wrap; gap: .3rem; white-space: normal; }
-.places { margin: -.4rem 0 0; color: var(--muted); font-size: .95rem; }
-.places summary { cursor: pointer; }
+.places {
+  margin: 0 0 1rem; padding: .6rem .75rem; color: var(--muted); font-size: .95rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+}
+.places h2 { font-size: 1rem; margin: 0 0 .25rem; color: var(--ink); }
 .places ul { list-style: none; padding: 0; margin: .5rem 0; }
 .places li { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; border-bottom: 1px solid var(--line); }
 .places li .pname { color: var(--ink); font-weight: 700; }
@@ -298,7 +304,27 @@ button.ghost { background: var(--surface); color: var(--transit); border: 1px so
 </head>
 <body>
 <main>
-<h1>HomeApprox</h1>
+<header class="top">
+  <h1>HomeApprox</h1>
+  <button type="button" id="settings" class="gear" aria-label="Einstellungen" aria-expanded="false" aria-controls="places-panel">⚙</button>
+</header>
+
+<!-- Settings: custom places (name + stops with walk minutes). Opened by the gear. -->
+<section id="places-panel" class="places" hidden>
+  <h2>⌂ Orte</h2>
+  <ul id="places-list"></ul>
+  <div id="place-form">
+    <input type="text" id="pf-name" placeholder="Name, z. B. Büro">
+    <div id="pf-stops"></div>
+    <div class="row">
+      <button type="button" id="pf-add" class="ghost">+ Haltestelle</button>
+      <button type="button" id="pf-save">Speichern</button>
+      <button type="button" id="pf-cancel" class="ghost" hidden>Abbrechen</button>
+    </div>
+    <p id="pf-error" class="error" role="alert"></p>
+  </div>
+  <datalist id="stop-options"></datalist>
+</section>
 
 <form id="form">
   <div class="row">
@@ -327,23 +353,6 @@ button.ghost { background: var(--surface); color: var(--transit); border: 1px so
     <!-- Picked destinations; the field then takes the next one. -->
     <div id="dests" class="dests"></div>
   </div>
-
-  <!-- Custom places: name + stops with walk minutes. Collapsed by default. -->
-  <details id="places-panel" class="places">
-    <summary>⌂ Orte</summary>
-    <ul id="places-list"></ul>
-    <div id="place-form">
-      <input type="text" id="pf-name" placeholder="Name, z. B. Büro">
-      <div id="pf-stops"></div>
-      <div class="row">
-        <button type="button" id="pf-add" class="ghost">+ Haltestelle</button>
-        <button type="button" id="pf-save">Speichern</button>
-        <button type="button" id="pf-cancel" class="ghost" hidden>Abbrechen</button>
-      </div>
-      <p id="pf-error" class="error" role="alert"></p>
-    </div>
-    <datalist id="stop-options"></datalist>
-  </details>
 
   <div class="row">
     <div class="seg" role="radiogroup" aria-label="Zeitbezug">
@@ -1180,7 +1189,9 @@ const Planner = (() => {
       } else if (t.dep < x.from) {
         rel = AltRel.EARLIER;
       }
-      return { trip: t, rel, delta: minutesBetween(j.transitEnd, t.arr) };
+      // wait: departure vs. my arrival at the stop (−4 = left 4 min before
+      // I get there). delta: arrival at the destination vs. planned.
+      return { trip: t, rel, wait: minutesBetween(x.from, t.dep), delta: minutesBetween(j.transitEnd, t.arr) };
     });
   }
 
@@ -1766,9 +1777,9 @@ function renderAlternatives(panel, j, x, alts) {
     }
     const d = document.createElement("span");
     d.className = "d";
-    const delta = a.delta === 0 ? "±0" : a.delta > 0 ? `+${a.delta}` : `−${-a.delta}`;
-    d.textContent = a.rel === AltRel.PLANNED ? ALT_REL_TEXT[a.rel] : `${delta} Min.`;
-    d.title = ALT_REL_TEXT[a.rel];
+    const wait = a.wait === 0 ? "±0" : a.wait > 0 ? `+${a.wait}` : `−${-a.wait}`;
+    d.textContent = a.rel === AltRel.PLANNED ? `${ALT_REL_TEXT[a.rel]} ${wait}` : `${wait} Min.`;
+    d.title = `${ALT_REL_TEXT[a.rel]} · Abfahrt gegenüber meiner Ankunft hier`;
     bar.append(segment("now", x.from, x.from, t0, t1));
     row.append(t, bar, d);
 
@@ -1787,7 +1798,7 @@ function renderAlternatives(panel, j, x, alts) {
 
   const legend = document.createElement("div");
   legend.className = "legend";
-  legend.textContent = "Gestrichelt: geplante Ankunft hier. Blass: fährt vorher, nur erreichbar bei Verspätung. ± = Ankunft am Ziel gegenüber geplant.";
+  legend.textContent = "Gestrichelt: geplante Ankunft hier. Blass: fährt vorher, nur erreichbar bei Verspätung. ± = Abfahrt gegenüber meiner Ankunft hier.";
   panel.append(legend);
 }
 
@@ -2067,6 +2078,11 @@ const PlacesEditor = (() => {
     });
     $("pf-add").addEventListener("click", () => $("pf-stops").append(stopRow()));
     $("pf-cancel").addEventListener("click", () => showForm(null));
+    $("settings").addEventListener("click", () => {
+      const panel = $("places-panel");
+      panel.hidden = !panel.hidden;
+      $("settings").setAttribute("aria-expanded", String(!panel.hidden));
+    });
   }
 
   return { init };
