@@ -402,7 +402,22 @@ const BOARD_LOOKBACK_MIN = 60; // board window before the first hub train (arriv
 const FEEDER_ARRIVE_SLACK_MIN = 25; // rough feeder ride + change, toHome + arrive
 const FEEDER_MAX_WAIT_MIN = 20; // longer wait at the hub: feeder makes no sense
 
-// OTHER: plain A → B search, no home stops, no feeders, no home walk.
+// Place: where a journey starts or ends. A station is one stop with no walk.
+// A custom place is several stops, each with its own walk, plus feeders.
+//   Zuhause ──2'──► Furtbach          station("Bern") ──0'──► Bern
+//           ──6'──► Ifang
+//           ──15'─► Wallisellen
+// Rules that apply at a custom end: the walk there is ours (an API walk
+// there means another stop was reached → drop), same vehicle boarded at
+// two of its stops is pruned to the best one, secondary stops are dropped
+// when covered, feeders are built from its boards.
+const ZUHAUSE = Object.freeze({ name: "Zuhause", custom: true, stops: HOME_STOPS, feeders: FEEDERS });
+const station = (name) => ({ name, custom: false, stops: [{ name, walkMin: 0 }], feeders: [] });
+const asPlace = (p) => (typeof p === "string" ? station(p) : p);
+const Side = Object.freeze({ FROM: "from", TO: "to" });
+
+// Direction of the form; maps onto (from place, to place), see plan().
+// OTHER: plain A → B search, no custom end.
 const Direction = Object.freeze({ TO_HOME: "toHome", FROM_HOME: "fromHome", OTHER: "other" });
 const TimeRef = Object.freeze({ DEPART: "depart", ARRIVE: "arrive" });
 const LegKind = Object.freeze({ RIDE: "ride", WALK: "walk", CHANGE: "change" });
@@ -657,19 +672,40 @@ const Planner = (() => {
     return at;
   }
 
-  // Full door-to-door journey for one trip. `query` records what was asked
-  // of the API, so odd results can be traced.
-  function toJourney(trip, stop, dir, query) {
-    const toHome = dir === Direction.TO_HOME;
+  // Which side is custom; the form's Direction for the UI (followUpSearch).
+  //   from custom → fromHome, to custom → toHome, neither → other.
+  // Both custom: fromHome (follow-up searches then run from the transfer).
+  function dirOf(from, to) {
+    if (from.custom) {
+      return Direction.FROM_HOME;
+    }
+    return to.custom ? Direction.TO_HOME : Direction.OTHER;
+  }
+
+  // Full door-to-door journey for one trip between stop `sf` of place
+  // `from` and stop `st` of place `to`. `query` records what was asked of
+  // the API, so odd results can be traced.
+  //   start ··walkStart··► transitStart ──rides──► transitEnd ··walkEnd··► end
+  function toJourney(trip, ends, query) {
+    const { from, sf, to, st } = ends;
+    const dir = dirOf(from, to);
+    const walkStartMin = from.custom ? sf.walkMin : 0;
+    const walkEndMin = to.custom ? st.walkMin : 0;
+    // homeStop: the custom end's stop (from side first); pruning keys on it.
+    const homeStop = from.custom ? sf.name : to.custom ? st.name : undefined;
     return {
-      stop: toHome ? trip.to : trip.from,
+      stop: homeStop,
+      homeStop,
       from: trip.from,
       to: trip.to,
-      walkMin: stop.walkMin,
-      homeStop: stop.name,
-      walkFirst: !toHome,
-      start: toHome ? trip.dep : shift(trip.dep, -stop.walkMin),
-      end: toHome ? shift(trip.arr, stop.walkMin) : trip.arr,
+      fromPlace: from.name,
+      toPlace: to.name,
+      fromStop: sf.name,
+      toStop: st.name,
+      walkStartMin,
+      walkEndMin,
+      start: shift(trip.dep, -walkStartMin),
+      end: shift(trip.arr, walkEndMin),
       transitStart: trip.dep,
       transitEnd: trip.arr,
       lines: trip.lines,
@@ -677,15 +713,26 @@ const Planner = (() => {
       legs: trip.legs,
       hasExtraWalk: trip.legs.some((l) => l.kind === LegKind.WALK),
       dir,
-      homeEnd: dir !== Direction.OTHER,
+      homeEnd: from.custom || to.custom,
       query,
     };
   }
 
-  // The walk at the home end is ours (HOME_STOPS). If the API adds its own
-  // there, it reached a different stop than asked: drop the trip.
-  //   fromHome: [walk?] ride ... ride [walk]   ← first leg must not be a walk
-  //   toHome:   [walk] ride ... ride [walk?]   ← last leg must not be a walk
+  // The walk at a custom end is ours. If the API adds its own there, it
+  // reached a different stop than asked: drop the trip.
+  //   from custom: [walk?] ride ... ride [walk]   ← first leg must be a ride
+  //   to custom:   [walk] ride ... ride [walk?]   ← last leg must be a ride
+  function endsAreClean(trip, from, to) {
+    const legs = trip.legs;
+    if (!legs.length) {
+      return true;
+    }
+    const okFrom = !from.custom || legs[0].kind === LegKind.RIDE;
+    const okTo = !to.custom || legs[legs.length - 1].kind === LegKind.RIDE;
+    return okFrom && okTo;
+  }
+
+  // Legacy check by direction, used by the feeder build.
   function homeEndIsClean(trip, dir) {
     const legs = trip.legs;
     if (!legs.length) {
@@ -695,14 +742,18 @@ const Planner = (() => {
     return homeLeg.kind === LegKind.RIDE;
   }
 
-  async function forStop(stop, place, at, dir, timeRef) {
-    const t = queryTime(at, dir, timeRef, stop.walkMin);
-    const [from, to] = dir === Direction.TO_HOME ? [place, stop.name] : [stop.name, place];
-    const trips = await connectionsCovering(from, to, t, timeRef);
-    const query = { from, to, at: t, timeRef };
+  // One stop pair. Ab: the ride must leave after walking to sf.
+  // An: it must arrive before walking from st.
+  async function forPair(ends, at, timeRef) {
+    const { from, sf, to, st } = ends;
+    const t = timeRef === TimeRef.DEPART
+      ? shift(at, from.custom ? sf.walkMin : 0)
+      : shift(at, -(to.custom ? st.walkMin : 0));
+    const trips = await connectionsCovering(sf.name, st.name, t, timeRef);
+    const query = { from: sf.name, to: st.name, at: t, timeRef };
     return trips
-      .filter((trip) => homeEndIsClean(trip, dir))
-      .map((trip) => toJourney(trip, stop, dir, query));
+      .filter((trip) => endsAreClean(trip, from, to))
+      .map((trip) => toJourney(trip, ends, query));
   }
 
   // Feeder trip = feeder ride + hub trip (fromHome) or hub trip + feeder ride
@@ -744,9 +795,12 @@ const Planner = (() => {
 
   // One feeder: hub connections + departure board, sequenced so the board
   // window covers the hub trains (fromHome) or hub arrivals (toHome).
-  async function forFeeder(f, place, at, dir, timeRef) {
-    const stop = HOME_STOPS.find((s) => s.name === f.stop);
+  // `home`: the custom place the feeder belongs to; `far`: { place, stop }
+  // at the other end (its walk is added when that place is custom too).
+  async function forFeeder(f, home, far, at, dir, timeRef) {
+    const stop = home.stops.find((s) => s.name === f.stop);
     const fromHome = dir === Direction.FROM_HOME;
+    const place = far.stop.name;
     const [boardAt, target] = fromHome ? [f.board, f.alight] : [f.alight, f.board];
     const [from, to] = fromHome ? [f.hub, place] : [place, f.hub];
     let hubTrips;
@@ -776,27 +830,31 @@ const Planner = (() => {
     }
 
     const query = { from, to, at: hubTime, timeRef, feeder: `${f.lines.join("/")} ${f.board} ↔ ${f.alight}` };
+    const ends = fromHome
+      ? { from: home, sf: stop, to: far.place, st: far.stop }
+      : { from: far.place, sf: far.stop, to: home, st: stop };
     return hubTrips
       .filter((t) => homeEndIsClean(t, dir))
       .map((t) => joinFeeder(t, rides, f, dir))
       .filter(Boolean)
-      .map((trip) => toJourney(trip, stop, dir, query));
+      .map((trip) => toJourney(trip, ends, query));
   }
 
   // Vehicle identity: API trip name (same bus at another stop has another time).
   const vehicleKey = (l) => `${l.line}#${l.tripId || l.dep.getTime()}`;
 
-  // Home-end ride: first ride from home, last ride to home.
-  const homeRide = (j, dir) => {
+  // Ride at one end: first ride on the from side, last on the to side.
+  const endRide = (j, side) => {
     const rides = j.legs.filter((l) => l.kind === LegKind.RIDE);
-    return dir === Direction.FROM_HOME ? rides[0] : rides[rides.length - 1];
+    return side === Side.FROM ? rides[0] : rides[rides.length - 1];
   };
+  const endStop = (j, side) => (side === Side.FROM ? j.fromStop : j.toStop);
 
-  // A secondary stop's journey is dropped if its home-end vehicle already
-  // appears in any journey of the other stops.
-  function dropCoveredSecondary(journeys, dir) {
-    const secondary = new Set(HOME_STOPS.filter((s) => s.secondary).map((s) => s.name));
-    const isSecondary = (j) => secondary.has(j.homeStop);
+  // A secondary stop's journey is dropped if the vehicle at that end
+  // already appears in any journey of the other stops.
+  function dropCoveredSecondary(journeys, side, place) {
+    const secondary = new Set(place.stops.filter((s) => s.secondary).map((s) => s.name));
+    const isSecondary = (j) => secondary.has(endStop(j, side));
     const used = new Set(
       journeys.filter((j) => !isSecondary(j)).flatMap((j) =>
         j.legs.filter((l) => l.kind === LegKind.RIDE).map(vehicleKey))
@@ -805,22 +863,23 @@ const Planner = (() => {
       if (!isSecondary(j)) {
         return true;
       }
-      const ride = homeRide(j, dir);
+      const ride = endRide(j, side);
       return !ride || !used.has(vehicleKey(ride));
     });
   }
 
-  // Same home-end vehicle, same far end: only the best stop to board it is
-  // kept. E.g. T12 from Glatt (Tram) 09:55 (walk 13) vs. Wallisellen Bahnhof
-  // 09:56 (walk 15), both arriving 10:13: leaving home 09:42 beats 09:41.
-  //   fromHome: same vehicle + same arrival → latest start wins
-  //   toHome:   same vehicle + same departure → earliest end wins
+  // Same vehicle at a custom end, same other end: only the best stop to
+  // board/alight it is kept. E.g. T12 from Glatt (Tram) 09:55 (walk 13) vs.
+  // Wallisellen Bahnhof 09:56 (walk 15), both arriving 10:13: leaving home
+  // 09:42 beats 09:41.
+  //   from side: same vehicle + same end   → latest start wins
+  //   to side:   same vehicle + same start → earliest end wins
   // Ties stay (both shown).
-  function dropDominatedBoarding(journeys, dir) {
-    const fromHome = dir === Direction.FROM_HOME;
+  function dropDominatedBoarding(journeys, side) {
+    const fromHome = side === Side.FROM;
     const groups = new Map();
     journeys.forEach((j) => {
-      const ride = homeRide(j, dir);
+      const ride = endRide(j, side);
       if (!ride) {
         return;
       }
@@ -860,9 +919,13 @@ const Planner = (() => {
   // Duplicates, covered secondary stops, dominated boardings; sorted.
   // Secondary check first: a covered secondary stop must not win the
   // dominance comparison against the primary stop it duplicates.
-  function prune(journeys, dir) {
-    const once = dedupe(journeys);
-    const pruned = dir === Direction.OTHER ? once : dropDominatedBoarding(dropCoveredSecondary(once, dir), dir);
+  function prune(journeys, from, to) {
+    let pruned = dedupe(journeys);
+    [[Side.FROM, from], [Side.TO, to]].forEach(([side, place]) => {
+      if (place.custom) {
+        pruned = dropDominatedBoarding(dropCoveredSecondary(pruned, side, place), side);
+      }
+    });
     return pruned.sort((a, b) => a.start - b.start);
   }
 
@@ -871,32 +934,38 @@ const Planner = (() => {
     ? { lo: at, hi: shift(at, MIN_WINDOW_MIN) }
     : { lo: shift(at, -MIN_WINDOW_MIN), hi: at };
 
-  // Anderer Ort: one pair, walks anywhere are the API's and stay.
-  async function planOther(origin, place, at, timeRef) {
-    const trips = await connectionsCovering(origin, place, at, timeRef);
-    const query = { from: origin, to: place, at, timeRef };
-    const stop = { name: origin, walkMin: 0 };
-    const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
-    const journeys = dedupe(trips.map((t) => toJourney(t, stop, Direction.OTHER, query)))
-      .filter(fits)
-      .sort((a, b) => a.start - b.start);
-    return { journeys, failed: [], at, timeRef, ...defaultRange(at, timeRef) };
+  // Which sides are custom for a form direction; enough for pruning merged
+  // results where the far places are several.
+  function customSides(dir) {
+    const none = station("");
+    if (dir === Direction.TO_HOME) {
+      return [none, ZUHAUSE];
+    }
+    return dir === Direction.FROM_HOME ? [ZUHAUSE, none] : [none, none];
   }
 
-  // `origin` only for Direction.OTHER.
-  // One place or several: plan each, merge, order by departure. Failures
-  // are labelled with the place when there is more than one.
+  // Form entry: direction + place(s) → (from, to) place pairs. `origin`
+  // only for Direction.OTHER. Several places: planned each, merged, ordered
+  // by departure; failures labelled with the place when there are several.
+  //   toHome:   place → Zuhause     fromHome: Zuhause → place
+  //   other:    origin → place
   async function plan(placeOrPlaces, at, dir, timeRef, origin) {
-    const places = [].concat(placeOrPlaces);
-    const settled = await Promise.allSettled(places.map((p) => planOne(p, at, dir, timeRef, origin)));
+    const places = [].concat(placeOrPlaces).map(asPlace);
+    const pair = (p) => {
+      if (dir === Direction.TO_HOME) {
+        return [p, ZUHAUSE];
+      }
+      return dir === Direction.FROM_HOME ? [ZUHAUSE, p] : [asPlace(origin), p];
+    };
+    const settled = await Promise.allSettled(places.map((p) => planPlaces(...pair(p), at, timeRef)));
     const failed = [];
     let journeys = [];
     settled.forEach((r, i) => {
       if (r.status === "rejected") {
-        failed.push(places[i]);
+        failed.push(places[i].name);
         return;
       }
-      const tag = places.length > 1 ? `${places[i]}: ` : "";
+      const tag = places.length > 1 ? `${places[i].name}: ` : "";
       failed.push(...r.value.failed.map((f) => tag + f));
       journeys = journeys.concat(r.value.journeys);
     });
@@ -904,17 +973,30 @@ const Planner = (() => {
     return { journeys, failed, at, timeRef, ...defaultRange(at, timeRef) };
   }
 
-  async function planOne(place, at, dir, timeRef, origin) {
-    if (dir === Direction.OTHER) {
-      return planOther(origin, place, at, timeRef);
+  // Core: every stop pair of the two places plus the feeders of each custom
+  // end, all in parallel; one failing task doesn't block the others.
+  //   from.stops × to.stops          → forPair
+  //   from.feeders × to.stops        → forFeeder (fromHome)
+  //   from.stops × to.feeders        → forFeeder (toHome)
+  async function planPlaces(from, to, at, timeRef) {
+    const tasks = [];
+    from.stops.forEach((sf) => to.stops.forEach((st) => tasks.push({
+      label: from.custom && !to.custom ? sf.name : to.custom && !from.custom ? st.name : `${sf.name} → ${st.name}`,
+      run: () => forPair({ from, sf, to, st }, at, timeRef),
+    })));
+    const feederLabel = (f) => `${f.stop} (${f.lines.join("/")} → ${f.hub})`;
+    if (from.custom) {
+      from.feeders.forEach((f) => to.stops.forEach((st) => tasks.push({
+        label: feederLabel(f),
+        run: () => forFeeder(f, from, { place: to, stop: st }, at, Direction.FROM_HOME, timeRef),
+      })));
     }
-    const tasks = [
-      ...HOME_STOPS.map((s) => ({ label: s.name, run: () => forStop(s, place, at, dir, timeRef) })),
-      ...FEEDERS.map((f) => ({
-        label: `${f.stop} (${f.lines.join("/")} → ${f.hub})`,
-        run: () => forFeeder(f, place, at, dir, timeRef),
-      })),
-    ];
+    if (to.custom) {
+      to.feeders.forEach((f) => from.stops.forEach((sf) => tasks.push({
+        label: feederLabel(f),
+        run: () => forFeeder(f, to, { place: from, stop: sf }, at, Direction.TO_HOME, timeRef),
+      })));
+    }
     const settled = await Promise.allSettled(tasks.map((t) => t.run()));
 
     const failed = [];
@@ -926,7 +1008,7 @@ const Planner = (() => {
       }
       journeys = journeys.concat(r.value);
     });
-    journeys = prune(journeys, dir);
+    journeys = prune(journeys, from, to);
 
     // Keep journeys within the requested window, ordered by departure.
     const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
@@ -1104,14 +1186,14 @@ const Planner = (() => {
     const more = await plan(places, q, dir, timeRef, origin);
     return {
       ...result,
-      journeys: prune([...result.journeys, ...more.journeys], dir),
+      journeys: prune([...result.journeys, ...more.journeys], ...customSides(dir)),
       failed: [...new Set([...result.failed, ...more.failed])],
       lo,
       hi,
     };
   }
 
-  return { plan, search, extend, visible, suggest, stopAbbr, shortName, alternatives, followUpSearch };
+  return { plan, planPlaces, search, extend, visible, suggest, stopAbbr, shortName, alternatives, followUpSearch };
 })();
 
 // ---------- Stations: recent + favorites, persisted in localStorage ----------
@@ -1357,8 +1439,10 @@ function renderJourney(j, t0, t1, scale, past) {
   // Home walk, a wait track under the whole transit span, gray transfer blocks,
   // then each API leg (ride = solid blue with line, walk = dotted; short change
   // walks are covered by the transfer block), then bubbles: start, transfers, end.
-  const walkFrom = j.walkFirst ? j.start : j.transitEnd;
-  const walkTo = j.walkFirst ? j.transitStart : j.end;
+  const ownWalks = [
+    ...(j.walkStartMin ? [segment("walk", j.start, j.transitStart, t0, t1)] : []),
+    ...(j.walkEndMin ? [segment("walk", j.transitEnd, j.end, t0, t1)] : []),
+  ];
   const legSeg = (l) => {
     if (l.kind === LegKind.RIDE) {
       return labelled("transit", l.dep, l.arr, t0, t1, [l.line], `${l.line} → ${l.headsign}`);
@@ -1366,7 +1450,7 @@ function renderJourney(j, t0, t1, scale, past) {
     return l.kind === LegKind.WALK ? segment("walk", l.dep, l.arr, t0, t1) : null;
   };
   bar.append(
-    segment("walk", walkFrom, walkTo, t0, t1),
+    ...ownWalks,
     segment("wait", j.transitStart, j.transitEnd, t0, t1),
     ...j.transfers.map((x) => segment("xfer", x.from, x.to, t0, t1)),
     ...(j.legs.length
@@ -1416,21 +1500,15 @@ function renderDetails(j) {
   return box;
 }
 
-// Rows of the leg table, incl. our own home walk at the home end.
+// Rows of the leg table, incl. our own walks at custom ends.
 function legRows(j) {
   const api = j.legs.map((l) => ({ ...l, walkMin: Math.round(l.walkSec / 60) }));
-  if (!j.homeEnd) {
-    return api;
-  }
-  const homeWalk = {
-    kind: LegKind.WALK,
-    walkMin: j.walkMin,
-    from: j.walkFirst ? "Zuhause" : j.stop,
-    to: j.walkFirst ? j.stop : "Zuhause",
-    dep: j.walkFirst ? j.start : j.transitEnd,
-    arr: j.walkFirst ? j.transitStart : j.end,
-  };
-  return j.walkFirst ? [homeWalk, ...api] : [...api, homeWalk];
+  const walk = (min, from, to, dep, arr) => ({ kind: LegKind.WALK, walkMin: min, from, to, dep, arr });
+  return [
+    ...(j.walkStartMin ? [walk(j.walkStartMin, j.fromPlace, j.fromStop, j.start, j.transitStart)] : []),
+    ...api,
+    ...(j.walkEndMin ? [walk(j.walkEndMin, j.toStop, j.toPlace, j.transitEnd, j.end)] : []),
+  ];
 }
 
 function cell(cls, text) {

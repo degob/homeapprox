@@ -83,7 +83,7 @@ export function loadApp() {
 
   const app = vm.runInContext(
     "({ Planner, TransportApi, Stations, durColor, LegKind, Direction, TimeRef, WalkMode, AltRel," +
-      " HOME_STOPS, FEEDERS, MIN_WINDOW_MIN, MAX_RESULTS, MAX_PAGES, FEEDER_MAX_WAIT_MIN })",
+      " HOME_STOPS, FEEDERS, ZUHAUSE, station, MIN_WINDOW_MIN, MAX_RESULTS, MAX_PAGES, FEEDER_MAX_WAIT_MIN })",
     context
   );
   return {

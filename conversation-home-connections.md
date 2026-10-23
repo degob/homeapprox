@@ -729,3 +729,20 @@ GitHub-Test rot: `places.map is not a function`.
 ## Claude
 
 Tests rufen `Planner.plan("Bern", …)` mit einem String. `plan()` nimmt jetzt String oder Liste (`[].concat`). 57/57 grün.
+
+---
+
+## User
+
+Eigene Orte = mehrere Haltestellen mit je Gehzeit, wie Zuhause. Verallgemeinern. (Aufteilung: 1 Modell + Suche, 2 Speicher + Editor, 3 Export/Import/URL, 4 UI-Vereinheitlichung. Schritt 1 jetzt.)
+
+## Claude
+
+*(Aktualisiert `index.html`, Tests.)* Schritt 1.
+
+- `Place = { name, custom, stops: [{ name, walkMin, secondary? }], feeders }`. `ZUHAUSE` = HOME_STOPS + FEEDERS. `station(name)` = ein Stop, Gehzeit 0. `asPlace()` nimmt String oder Place.
+- `Planner.planPlaces(from, to, at, timeRef)`: Paare `from.stops × to.stops` (`forPair`), Zubringer je eigenem Ende. Regeln am eigenen Ende (API-Fussweg dort → verwerfen, Sekundär-Stops, gleiches Fahrzeug an zwei Stops) gelten pro Seite (`Side.FROM/TO`), auch beidseitig.
+- `Planner.plan(placeOrPlaces, at, dir, timeRef, origin)` bleibt als Formular-Einstieg; `dir` → Ortspaar. Ziel darf schon ein Place-Objekt sein.
+- Journey: `walkStartMin`, `walkEndMin`, `fromPlace/toPlace`, `fromStop/toStop`; `homeStop`, `homeEnd`, `dir` bleiben (Tests, UI). Balken und Detailtabelle zeigen eigene Fusswege an beiden Enden.
+- Nicht verallgemeinert: Zubringer bleiben Daten von Zuhause; `extend()` prunt gemischte Resultate nur nach Formularrichtung (`customSides`).
+- 62/62 Tests, 5 neu (ferner Ort eigen, An-Modus, API-Fussweg am fernen Ende, beidseitig eigen, `station()`).

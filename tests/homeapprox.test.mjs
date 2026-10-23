@@ -687,3 +687,69 @@ describe("recently left and more connections", () => {
     assert.deepEqual([...starts], [...starts].sort());
   });
 });
+
+// ---------- Custom places (generalised Zuhause) ----------
+
+describe("custom places", () => {
+  // Work: two stations, 5 and 12 min from the office.
+  const work = { name: "Büro", custom: true, feeders: [], stops: [
+    { name: "Zürich Oerlikon", walkMin: 5 },
+    { name: "Zürich Seebach", walkMin: 12 },
+  ] };
+
+  test("far end custom: walk added at that end, one query per home stop × work stop", async () => {
+    const app = loadApp();
+    connectionsFor(app, {
+      "Wallisellen→Zürich Oerlikon": [conn(ride("S", "8", "Wallisellen", [8, 20], "Zürich Oerlikon", [8, 25]))],
+      "Wallisellen→Zürich Seebach": [conn(ride("S", "6", "Wallisellen", [8, 18], "Zürich Seebach", [8, 30]))],
+    });
+    const { journeys } = await app.Planner.plan(work, at(8, 0), "fromHome", "depart");
+    const via = (stop) => journeys.find((j) => j.toStop === stop);
+    assert.equal(hm(via("Zürich Oerlikon").end), "08:30"); // 08:25 + 5
+    assert.equal(hm(via("Zürich Seebach").end), "08:42"); // 08:30 + 12
+    assert.equal(via("Zürich Oerlikon").toPlace, "Büro");
+    assert.equal(hm(via("Zürich Oerlikon").start), "08:05"); // 15 min walk at home
+    assert.ok(app.requests.some((r) => r.params.get("to") === "Zürich Seebach"));
+  });
+
+  test("An + far end custom: ride must arrive before walking there", async () => {
+    const app = loadApp();
+    connectionsFor(app, {
+      "Wallisellen→Zürich Seebach": (p) => (p.get("time") === "08:48" ? [conn(ride("S", "6", "Wallisellen", [8, 18], "Zürich Seebach", [8, 30]))] : []),
+    });
+    const { journeys } = await app.Planner.plan(work, at(9, 0), "fromHome", "arrive");
+    assert.ok(journeys.some((j) => j.toStop === "Zürich Seebach")); // asked for arrival 09:00 − 12
+  });
+
+  test("API walk at the far custom end drops the trip", async () => {
+    const app = loadApp();
+    connectionsFor(app, {
+      "Wallisellen→Zürich Oerlikon": [conn(
+        ride("S", "8", "Wallisellen", [8, 20], "Zürich Oerlikon, Bahnhof Ost", [8, 25]),
+        walk("Zürich Oerlikon, Bahnhof Ost", [8, 25], "Zürich Oerlikon", [8, 32]),
+      )],
+    });
+    const { journeys } = await app.Planner.plan(work, at(8, 0), "fromHome", "depart");
+    assert.equal(journeys.length, 0);
+  });
+
+  test("planPlaces: two custom places, walks at both ends, Direction other", async () => {
+    const app = loadApp();
+    const gym = { name: "Gym", custom: true, feeders: [], stops: [{ name: "Stettbach", walkMin: 7 }] };
+    connectionsFor(app, {
+      "Zürich Oerlikon→Stettbach": [conn(ride("S", "9", "Zürich Oerlikon", [18, 10], "Stettbach", [18, 20]))],
+    });
+    const { journeys } = await app.Planner.planPlaces(work, gym, at(18, 0), "depart");
+    assert.equal(journeys.length, 1);
+    assert.equal(hm(journeys[0].start), "18:05");
+    assert.equal(hm(journeys[0].end), "18:27");
+    assert.equal(journeys[0].walkStartMin, 5);
+    assert.equal(journeys[0].walkEndMin, 7);
+  });
+
+  test("a station is a place with one stop and no walk", () => {
+    const app = loadApp();
+    assert.deepEqual(plain(app.station("Bern")), { name: "Bern", custom: false, stops: [{ name: "Bern", walkMin: 0 }], feeders: [] });
+    assert.equal(app.ZUHAUSE.stops.length, app.HOME_STOPS.length);
+  });
+});
