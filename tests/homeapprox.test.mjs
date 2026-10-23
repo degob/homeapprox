@@ -753,3 +753,39 @@ describe("custom places", () => {
     assert.equal(app.ZUHAUSE.stops.length, app.HOME_STOPS.length);
   });
 });
+
+// ---------- Stored custom places ----------
+
+describe("stored places", () => {
+  test("normalize: trims, rounds walk minutes, drops empty stops, needs name and one stop", () => {
+    const app = loadApp();
+    const p = app.Places.normalize(" Büro ", [{ name: "Zürich Oerlikon", walkMin: "5.4" }, { name: " ", walkMin: "3" }]);
+    assert.deepEqual(plain(p), { name: "Büro", stops: [{ name: "Zürich Oerlikon", walkMin: 5 }] });
+    assert.throws(() => app.Places.normalize("", [{ name: "A", walkMin: 1 }]), /Name/);
+    assert.throws(() => app.Places.normalize("X", [{ name: "", walkMin: 1 }]), /Haltestelle/);
+  });
+
+  test("put, rename, remove; resolve gives the custom place or a station", () => {
+    const app = loadApp();
+    app.Places.put({ name: "Büro", stops: [{ name: "Zürich Oerlikon", walkMin: 5 }] });
+    app.Places.put({ name: "Arbeit", stops: [{ name: "Zürich Oerlikon", walkMin: 6 }] }, "Büro");
+    assert.deepEqual(plain(app.Places.names()), ["Arbeit"]);
+    const r = app.Places.resolve("Arbeit");
+    assert.equal(r.custom, true);
+    assert.equal(r.stops[0].walkMin, 6);
+    assert.equal(app.Places.resolve("Bern").custom, false);
+    app.Places.remove("Arbeit");
+    assert.deepEqual(plain(app.Places.names()), []);
+  });
+
+  test("a stored place works as destination of the form", async () => {
+    const app = loadApp();
+    app.Places.put({ name: "Büro", stops: [{ name: "Zürich Seebach", walkMin: 12 }] });
+    connectionsFor(app, {
+      "Wallisellen→Zürich Seebach": [conn(ride("S", "6", "Wallisellen", [8, 18], "Zürich Seebach", [8, 30]))],
+    });
+    const { journeys } = await app.Planner.plan(app.Places.resolve("Büro"), at(8, 0), "fromHome", "depart");
+    assert.equal(hm(journeys[0].end), "08:42");
+    assert.equal(journeys[0].toPlace, "Büro");
+  });
+});

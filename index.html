@@ -132,6 +132,19 @@ button.more:disabled { opacity: .6; cursor: default; }
 li.clickable { cursor: pointer; }
 #summary .toggle { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
 #summary .chips { flex-wrap: wrap; gap: .3rem; white-space: normal; }
+.places { margin: .9rem 0 0; color: var(--muted); font-size: .95rem; }
+.places summary { cursor: pointer; }
+.places ul { list-style: none; padding: 0; margin: .5rem 0; }
+.places li { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; border-bottom: 1px solid var(--line); }
+.places li .pname { color: var(--ink); font-weight: 700; }
+.places li .pstops { flex: 1; overflow-wrap: anywhere; }
+.places form { display: grid; gap: .5rem; margin-top: .5rem; }
+.places .stop-row { display: flex; gap: .4rem; align-items: center; }
+.places .stop-row input[type=text] { flex: 1; min-width: 0; }
+.places .stop-row input[type=number] { width: 4.5rem; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .4rem; }
+.places .error { color: var(--error); margin: 0; }
+.places .error:empty { display: none; }
+button.ghost { background: var(--surface); color: var(--transit); border: 1px solid var(--line); }
 .dests { display: flex; flex-wrap: wrap; gap: .3rem; width: 100%; }
 .dests:empty { display: none; }
 .dest {
@@ -323,6 +336,23 @@ li.clickable { cursor: pointer; }
 
 </form>
 
+<!-- Custom places: name + stops with walk minutes. Collapsed by default. -->
+<details id="places-panel" class="places">
+  <summary>⌂ Orte</summary>
+  <ul id="places-list"></ul>
+  <form id="place-form" autocomplete="off">
+    <input type="text" id="pf-name" placeholder="Name, z. B. Büro">
+    <div id="pf-stops"></div>
+    <div class="row">
+      <button type="button" id="pf-add" class="ghost">+ Haltestelle</button>
+      <button type="submit">Speichern</button>
+      <button type="button" id="pf-cancel" class="ghost" hidden>Abbrechen</button>
+    </div>
+    <p id="pf-error" class="error" role="alert"></p>
+  </form>
+  <datalist id="stop-options"></datalist>
+</details>
+
 <!-- Walk toggle; render() moves it into the summary's third row. -->
 <input type="checkbox" id="walk" checked hidden aria-label="Verbindungen mit zusätzlichem Fussweg zeigen">
 
@@ -437,6 +467,8 @@ const MAX_SUGGESTIONS = 6;
 const MAX_RECENT = 5;
 const DEBOUNCE_MS = 250;
 const STORAGE_KEY = "homeapprox.stations";
+const PLACES_KEY = "homeapprox.places";
+const PLACE_ICON = "⌂";
 
 // ---------- TransportApi: raw HTTP, nothing else knows the API shape ----------
 
@@ -1236,6 +1268,61 @@ const Stations = (() => {
   return { touch, toggleFavorite, isFavorite, favorites, recent };
 })();
 
+// ---------- Places: custom places (several stops + walk), persisted ----------
+
+const Places = (() => {
+  const load = () => {
+    try {
+      return JSON.parse(localStorage.getItem(PLACES_KEY)) || [];
+    } catch {
+      return [];
+    }
+  };
+  const save = (list) => {
+    try {
+      localStorage.setItem(PLACES_KEY, JSON.stringify(list));
+    } catch {
+      // Storage unavailable: places live for this page only.
+    }
+  };
+
+  // Stored shape is the data only; `custom` and `feeders` are added on read.
+  const toPlace = (p) => ({ name: p.name, custom: true, feeders: [], stops: p.stops });
+
+  const all = () => load().map(toPlace);
+  const names = () => load().map((p) => p.name);
+  const byName = (name) => all().find((p) => p.name === name) || null;
+
+  // A name typed or picked in a place field: custom place if one matches,
+  // else a plain station.
+  const resolve = (name) => byName(name) || station(name);
+
+  // Validated { name, stops }; throws a message for the form.
+  function normalize(name, stops) {
+    const n = name.trim();
+    if (!n) {
+      throw new Error("Name fehlt.");
+    }
+    const clean = stops
+      .map((s) => ({ name: s.name.trim(), walkMin: Math.max(0, Math.round(Number(s.walkMin) || 0)) }))
+      .filter((s) => s.name);
+    if (!clean.length) {
+      throw new Error("Mindestens eine Haltestelle.");
+    }
+    return { name: n, stops: clean };
+  }
+
+  // Insert or replace (by `oldName` when renaming).
+  function put(place, oldName = place.name) {
+    const rest = load().filter((p) => p.name !== oldName && p.name !== place.name);
+    save([...rest, place].sort((a, b) => a.name.localeCompare(b.name, "de")));
+  }
+
+  const remove = (name) => save(load().filter((p) => p.name !== name));
+
+  return { all, names, byName, resolve, normalize, put, remove };
+})();
+
 // ---------- UI ----------
 
 const $ = (id) => document.getElementById(id);
@@ -1713,7 +1800,7 @@ function placeField(inputId, listId, onPick = (name) => { $(inputId).value = nam
 
     const label = document.createElement("span");
     label.className = "name";
-    label.textContent = name;
+    label.textContent = Places.byName(name) ? `${PLACE_ICON} ${name}` : name;
 
     const star = document.createElement("button");
     star.type = "button";
@@ -1725,7 +1812,10 @@ function placeField(inputId, listId, onPick = (name) => { $(inputId).value = nam
       star.classList.toggle("on", Stations.toggleFavorite(name));
     });
 
-    li.append(label, star);
+    li.append(label);
+    if (!Places.byName(name)) {
+      li.append(star);
+    }
     li.addEventListener("click", () => {
       onPick(name);
       close();
@@ -1752,8 +1842,12 @@ function placeField(inputId, listId, onPick = (name) => { $(inputId).value = nam
     const l = list();
     l.replaceChildren();
     if (grouped) {
+      const places = Places.names();
       const favs = Stations.favorites();
       const recent = Stations.recent();
+      if (places.length) {
+        l.append(group("Orte"), ...places.map(item));
+      }
       if (favs.length) {
         l.append(group("Favoriten"), ...favs.map(item));
       }
@@ -1776,7 +1870,7 @@ function placeField(inputId, listId, onPick = (name) => { $(inputId).value = nam
       return;
     }
     timer = setTimeout(async () => {
-      const known = [...Stations.favorites(), ...Stations.recent()];
+      const known = [...Places.names(), ...Stations.favorites(), ...Stations.recent()];
       try {
         const names = await Planner.suggest(query, known);
         if (s === seq) {
@@ -1817,7 +1911,7 @@ const Destinations = (() => {
     names.forEach((name) => {
       const chip = document.createElement("span");
       chip.className = "dest";
-      chip.append(name);
+      chip.append(Places.byName(name) ? `${PLACE_ICON} ${name}` : name);
       const rm = document.createElement("button");
       rm.type = "button";
       rm.className = "rm";
@@ -1855,6 +1949,115 @@ const Destinations = (() => {
   }
 
   return { add, set, all, render };
+})();
+
+// ---------- Places editor: list, add, edit, delete ----------
+//   ⌂ Orte
+//   Büro   Zürich Oerlikon 5' · Zürich Seebach 12'   [✎] [×]
+//   [Name          ]
+//   [Haltestelle   ] [ 5] Min. [×]
+//   [+ Haltestelle] [Speichern]
+const PlacesEditor = (() => {
+  let editing = null; // name of the place being edited, null = new
+  let timer = null;
+
+  function stopRow(stop = { name: "", walkMin: "" }) {
+    const row = document.createElement("div");
+    row.className = "stop-row";
+    const name = document.createElement("input");
+    name.type = "text";
+    name.placeholder = "Haltestelle";
+    name.setAttribute("list", "stop-options");
+    name.value = stop.name;
+    name.addEventListener("input", () => fillOptions(name.value));
+    const walk = document.createElement("input");
+    walk.type = "number";
+    walk.min = "0";
+    walk.placeholder = "Min.";
+    walk.value = stop.walkMin;
+    walk.setAttribute("aria-label", "Gehminuten");
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "rm";
+    rm.textContent = "×";
+    rm.setAttribute("aria-label", "Haltestelle entfernen");
+    rm.addEventListener("click", () => row.remove());
+    row.append(name, walk, "Min.", rm);
+    return row;
+  }
+
+  // Datalist for stop names: API lookup after MIN_QUERY_CHARS, debounced.
+  function fillOptions(query) {
+    clearTimeout(timer);
+    if (query.trim().length < MIN_QUERY_CHARS) {
+      return;
+    }
+    timer = setTimeout(async () => {
+      try {
+        const names = await Planner.suggest(query.trim(), []);
+        const dl = $("stop-options");
+        dl.replaceChildren(...names.map((n) => Object.assign(document.createElement("option"), { value: n })));
+      } catch {
+        // No suggestions; typing still works.
+      }
+    }, DEBOUNCE_MS);
+  }
+
+  function readForm() {
+    const stops = [...$("pf-stops").querySelectorAll(".stop-row")].map((r) => {
+      const [name, walk] = r.querySelectorAll("input");
+      return { name: name.value, walkMin: walk.value };
+    });
+    return Places.normalize($("pf-name").value, stops);
+  }
+
+  function showForm(place) {
+    editing = place ? place.name : null;
+    $("pf-name").value = place ? place.name : "";
+    $("pf-stops").replaceChildren(...(place ? place.stops : [{ name: "", walkMin: "" }]).map(stopRow));
+    $("pf-cancel").hidden = !place;
+    $("pf-error").textContent = "";
+  }
+
+  function renderList() {
+    const ul = $("places-list");
+    ul.replaceChildren();
+    Places.all().forEach((p) => {
+      const li = document.createElement("li");
+      const name = document.createElement("span");
+      name.className = "pname";
+      name.textContent = p.name;
+      const stops = document.createElement("span");
+      stops.className = "pstops";
+      stops.textContent = p.stops.map((s) => `${s.name} ${s.walkMin}'`).join(" · ");
+      const edit = iconButton("✎", "Bearbeiten", () => showForm(p));
+      const del = iconButton("×", "Löschen", () => { Places.remove(p.name); renderList(); showForm(null); });
+      li.append(name, stops, edit, del);
+      ul.append(li);
+    });
+  }
+
+  function onSave(e) {
+    e.preventDefault();
+    try {
+      Places.put(readForm(), editing ?? undefined);
+    } catch (err) {
+      $("pf-error").textContent = err.message;
+      return;
+    }
+    renderList();
+    showForm(null);
+  }
+
+  function init() {
+    renderList();
+    showForm(null);
+    $("place-form").addEventListener("submit", onSave);
+    $("pf-add").addEventListener("click", () => $("pf-stops").append(stopRow()));
+    $("pf-cancel").addEventListener("click", () => showForm(null));
+  }
+
+  return { init };
 })();
 
 const placeFields = [placeField("place", "sugg", Destinations.add), placeField("origin", "origin-sugg")];
@@ -2458,7 +2661,7 @@ async function onSubmit(e) {
   render();
 
   try {
-    lastResult = await Planner.search(places, at, dir, timeRef, origin);
+    lastResult = await Planner.search(places.map(Places.resolve), at, dir, timeRef, Places.resolve(origin));
     Timeline.reset();
     render();
   } catch (err) {
@@ -2516,6 +2719,7 @@ Timeline.init();
 $("earlier").addEventListener("click", () => onMore("earlier"));
 $("later").addEventListener("click", () => onMore("later"));
 placeFields.forEach((f) => f.init());
+PlacesEditor.init();
 document.querySelectorAll("input[name=dir]").forEach((r) => r.addEventListener("change", onDirChange));
 $("form").addEventListener("submit", onSubmit);
 walkBox.addEventListener("change", render);

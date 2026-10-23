@@ -746,3 +746,16 @@ Eigene Orte = mehrere Haltestellen mit je Gehzeit, wie Zuhause. Verallgemeinern.
 - Journey: `walkStartMin`, `walkEndMin`, `fromPlace/toPlace`, `fromStop/toStop`; `homeStop`, `homeEnd`, `dir` bleiben (Tests, UI). Balken und Detailtabelle zeigen eigene Fusswege an beiden Enden.
 - Nicht verallgemeinert: Zubringer bleiben Daten von Zuhause; `extend()` prunt gemischte Resultate nur nach Formularrichtung (`customSides`).
 - 62/62 Tests, 5 neu (ferner Ort eigen, An-Modus, API-Fussweg am fernen Ende, beidseitig eigen, `station()`).
+
+## User
+
+Ja → Schritt 2.
+
+## Claude
+
+*(Aktualisiert `index.html`, Tests.)* Schritt 2: Speicher + Editor.
+
+- `Places`: localStorage `homeapprox.places`, gespeichert nur `{ name, stops }`; `custom`/`feeders` beim Lesen ergänzt. `resolve(name)` → eigener Ort oder `station(name)`. `normalize()` validiert (Name, ≥ 1 Haltestelle, Minuten gerundet ≥ 0). `put(place, oldName)` für Umbenennen.
+- Panel «⌂ Orte» unter dem Formular (`<details>`, zu): Liste mit ✎/×, Formular Name + Haltestellen-Zeilen (Text mit `<datalist>`-Vorschlägen ab 3 Zeichen, Minuten) + Haltestelle, Speichern, Abbrechen.
+- Vorschläge: Gruppe «Orte» zuerst, mit ⌂; kein Stern bei Orten. Chips zeigen ⌂. Suche löst Namen über `Places.resolve` auf, auch «Von».
+- 65/65 Tests, 3 neu.
