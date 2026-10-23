@@ -782,7 +782,14 @@ describe("stored places", () => {
     assert.equal(app.Places.home().name, "Oma");
     assert.deepEqual(plain(app.Places.names()), ["Oma", "Zuhause"]);
     app.Places.remove("Zuhause");
-    assert.deepEqual(plain(app.Places.names()), ["Oma"]);
+    assert.deepEqual(plain(app.Places.names()), ["Oma"]); // a home exists: no re-seed
+  });
+
+  test("storage from before homes existed gets Zuhause added", () => {
+    const app = loadApp();
+    app.localStorage.setItem("homeapprox.places", JSON.stringify([{ name: "Büro", stops: [{ name: "Zürich Oerlikon", walkMin: 5 }] }]));
+    assert.deepEqual(plain(app.Places.names()), ["Zuhause", "Büro"]);
+    assert.equal(app.Places.home().name, "Zuhause");
   });
 
   test("a stored place works as destination of the form", async () => {

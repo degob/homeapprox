@@ -933,3 +933,35 @@ Pro Haltestellen-Paar (sf → st):
 - Details-Zeile «Abfrage: … · via Abfahrtstafel Furtbach» bei nachgefragten Verbindungen.
 - Tests: Zubringer-Block ersetzt durch «board re-asks» (5), 66/66.
 - Offen: Umsteigezeit am Hub kommt jetzt von der API (vorher `changeMin` je Zubringer); Fenster-Slack 20' ist geraten.
+
+## User
+
+Zuhause ist in meiner lokalen Instanz verschwunden.
+
+## Claude
+
+Seed lief nur bei fehlendem Speicherschlüssel; der existierte seit Schritt 2. Jetzt: Zuhause wird ergänzt, sobald kein Ort `home` hat und keiner «Zuhause» heisst. Test dazu, 67/67. Seite neu laden genügt.
+
+## User
+
+Orte-Karte auf dem Handy: Layout kaputt (Haltestellen-Text zu lang, Editor-Zeilen überlaufen).
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Ortszeile als Grid: ★ Name ✎ × in einer Zeile, Haltestellen darunter (kleiner). Editor-Zeile als Grid `Name | Min. | neben | ×`, «Min.» als Platzhalter/Tooltip statt Text.
+
+## User
+
+✎ und × in der Liste redundant; ✎ rechts. Tabellenkopf für den bearbeiteten Ort.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Listenzeile: ★ Name ✎ (rechts), Haltestellen darunter; Löschen nur noch im Formular («Löschen», rot, neben Abbrechen). Formular: Titel «Zuhause bearbeiten»/«Neuer Ort» und Spaltenkopf «Haltestelle | Min. | Neben». ×-Button der Zeilen wieder klein/grau (Stil war nur für Chips definiert).
+
+## User
+
+«Min.»-Kopf zu weit links. Bei offenen Einstellungen den Suchteil ausgrauen.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Spaltenköpfe ab Spalte 2 zentriert. `openSettings(open)` setzt `main.settings-open`; alles ausser Kopfzeile und Orte-Karte wird 35 % sichtbar und nicht klickbar.

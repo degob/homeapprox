@@ -143,14 +143,31 @@ li.clickable { cursor: pointer; }
 }
 .places h2 { font-size: 1rem; margin: 0 0 .25rem; color: var(--ink); }
 .places ul { list-style: none; padding: 0; margin: .5rem 0; }
-.places li { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; border-bottom: 1px solid var(--line); }
+/* Place row: ★ name ✎ × on one line, the stops wrapped underneath.
+   ┌ ★ Zuhause                 ✎ × ┐
+   │   Furtbach 2' · Ifang 6' · …  │ */
+.places li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: .1rem .5rem;
+  align-items: center; padding: .35rem 0; border-bottom: 1px solid var(--line);
+}
 .places li .pname { color: var(--ink); font-weight: 700; }
+.places li .pstops { grid-column: 2 / -1; font-size: .85rem; }
+.places li { grid-template-columns: auto minmax(0, 1fr) auto; }
+.places h3 { font-size: .95rem; margin: .3rem 0 0; color: var(--ink); }
+.places .stop-row.head { font-size: .75rem; color: var(--muted); padding: 0 .3rem; }
+.places .stop-row.head span:nth-child(n+2) { text-align: center; }
+/* Settings open: the search below is dimmed and inert. */
+main.settings-open > :not(.top):not(#places-panel) { opacity: .35; pointer-events: none; }
+.places .rm { background: none; color: var(--muted); padding: 0 .3rem; font-size: 1rem; line-height: 1; }
+button.danger { color: var(--error); }
 .places .icon-btn.on { color: var(--walk); border-color: var(--walk); }
-.places li .pstops { flex: 1; overflow-wrap: anywhere; }
+.places li .pstops { overflow-wrap: anywhere; }
 .places #place-form { display: grid; gap: .5rem; margin-top: .5rem; }
-.places .stop-row { display: flex; gap: .4rem; align-items: center; }
-.places .stop-row input[type=text] { flex: 1; min-width: 0; }
-.places .stop-row input[type=number] { width: 4.5rem; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .4rem; }
+/* Stop row: name (fills) | minutes | secondary | × — fits a phone width. */
+.places .stop-row { display: grid; grid-template-columns: minmax(0, 1fr) 3.8rem auto auto; gap: .4rem; align-items: center; }
+.places .stop-row input[type=text] { min-width: 0; width: 100%; }
+.places .stop-row input[type=number] { width: 100%; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .3rem; }
+.places .stop-row input[type=checkbox] { margin: 0; accent-color: var(--transit); }
 .places .error { color: var(--error); margin: 0; }
 .places .error:empty { display: none; }
 button.ghost, label.ghost { background: var(--surface); color: var(--transit); border: 1px solid var(--line); }
@@ -335,12 +352,15 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
   <h2>⌂ Orte</h2>
   <ul id="places-list"></ul>
   <div id="place-form">
+    <h3 id="pf-title">Neuer Ort</h3>
     <input type="text" id="pf-name" placeholder="Name, z. B. Büro">
+    <div class="stop-row head" aria-hidden="true"><span>Haltestelle</span><span>Min.</span><span title="Nebenhaltestelle">Neben</span><span></span></div>
     <div id="pf-stops"></div>
     <div class="row">
       <button type="button" id="pf-add" class="ghost">+ Haltestelle</button>
       <button type="button" id="pf-save">Speichern</button>
       <button type="button" id="pf-cancel" class="ghost" hidden>Abbrechen</button>
+      <button type="button" id="pf-delete" class="ghost danger" hidden>Löschen</button>
     </div>
     <p id="pf-error" class="error" role="alert"></p>
   </div>
@@ -1245,15 +1265,18 @@ const Places = (() => {
     stops: ZUHAUSE.stops.map((s) => ({ name: s.name, walkMin: s.walkMin, ...(s.secondary ? { secondary: true } : {}) })),
   }];
 
-  // First run (key absent) gets Zuhause; an emptied list stays empty.
+  // Storage without a home place (first run, or saved before homes
+  // existed) gets Zuhause added — unless one named so is already there.
   const load = () => {
     try {
-      const raw = localStorage.getItem(PLACES_KEY);
-      if (raw === null) {
-        save(seed());
-        return seed();
+      const list = JSON.parse(localStorage.getItem(PLACES_KEY)) || [];
+      const hasHome = list.some((p) => p.home || p.name === ZUHAUSE.name);
+      if (hasHome) {
+        return list;
       }
-      return JSON.parse(raw) || [];
+      const seeded = [...seed(), ...list];
+      save(seeded);
+      return seeded;
     } catch {
       return seed();
     }
@@ -2056,6 +2079,7 @@ const PlacesEditor = (() => {
     walk.min = "0";
     walk.placeholder = "Min.";
     walk.value = stop.walkMin;
+    walk.title = "Gehminuten";
     walk.setAttribute("aria-label", "Gehminuten");
     // Secondary: only shown when its vehicle isn't already in another journey.
     const sec = document.createElement("input");
@@ -2069,7 +2093,7 @@ const PlacesEditor = (() => {
     rm.textContent = "×";
     rm.setAttribute("aria-label", "Haltestelle entfernen");
     rm.addEventListener("click", () => row.remove());
-    row.append(name, walk, "Min.", sec, rm);
+    row.append(name, walk, sec, rm);
     return row;
   }
 
@@ -2101,9 +2125,11 @@ const PlacesEditor = (() => {
 
   function showForm(place) {
     editing = place ? place.name : null;
+    $("pf-title").textContent = place ? `${place.name} bearbeiten` : "Neuer Ort";
     $("pf-name").value = place ? place.name : "";
     $("pf-stops").replaceChildren(...(place ? place.stops : [{ name: "", walkMin: "" }]).map(stopRow));
     $("pf-cancel").hidden = !place;
+    $("pf-delete").hidden = !place;
     $("pf-error").textContent = "";
   }
 
@@ -2118,13 +2144,11 @@ const PlacesEditor = (() => {
       const stops = document.createElement("span");
       stops.className = "pstops";
       stops.textContent = p.stops.map((s) => `${s.name} ${s.walkMin}'${s.secondary ? " (neben)" : ""}`).join(" · ");
-      // ★ marks the default "Von"; click another to move it.
+      // ★ marks the default "Von"; click another to move it. Delete lives
+      // in the edit form.
       const star = iconButton("★", p.home ? "Standard-Von" : "Als Standard-Von", () => { Places.setHome(p.name); renderList(); });
       star.classList.toggle("on", p.home);
-      li.append(star, name, stops,
-        iconButton("✎", "Bearbeiten", () => showForm(p)),
-        iconButton("×", "Löschen", () => { Places.remove(p.name); renderList(); showForm(null); })
-      );
+      li.append(star, name, iconButton("✎", "Bearbeiten", () => showForm(p)), stops);
       ul.append(li);
     });
   }
@@ -2183,14 +2207,20 @@ const PlacesEditor = (() => {
     }
   }
 
+  // Shows/hides the card; the search form below is dimmed meanwhile.
+  function openSettings(open) {
+    $("places-panel").hidden = !open;
+    $("settings").setAttribute("aria-expanded", String(open));
+    document.querySelector("main")?.classList.toggle("settings-open", open);
+  }
+
   // Opened via a share link: import, open the card, drop the fragment.
   function importFromHash() {
     const text = Places.fromHash(location.hash);
     if (text === null) {
       return;
     }
-    $("places-panel").hidden = false;
-    $("settings").setAttribute("aria-expanded", "true");
+    openSettings(true);
     importText(text);
     history.replaceState(null, "", location.pathname + location.search);
   }
@@ -2212,11 +2242,14 @@ const PlacesEditor = (() => {
     });
     $("pf-add").addEventListener("click", () => $("pf-stops").append(stopRow()));
     $("pf-cancel").addEventListener("click", () => showForm(null));
-    $("settings").addEventListener("click", () => {
-      const panel = $("places-panel");
-      panel.hidden = !panel.hidden;
-      $("settings").setAttribute("aria-expanded", String(!panel.hidden));
+    $("pf-delete").addEventListener("click", () => {
+      if (editing !== null) {
+        Places.remove(editing);
+        renderList();
+        showForm(null);
+      }
     });
+    $("settings").addEventListener("click", () => openSettings($("places-panel").hidden));
   }
 
   return { init };

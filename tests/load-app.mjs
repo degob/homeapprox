@@ -92,6 +92,7 @@ export function loadApp() {
   return {
     ...app,
     requests,
+    localStorage: context.localStorage,
     setRoute(fn) {
       route = fn;
     },
