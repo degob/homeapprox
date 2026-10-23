@@ -150,7 +150,10 @@ li.clickable { cursor: pointer; }
 .places .stop-row input[type=number] { width: 4.5rem; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .4rem; }
 .places .error { color: var(--error); margin: 0; }
 .places .error:empty { display: none; }
-button.ghost { background: var(--surface); color: var(--transit); border: 1px solid var(--line); }
+button.ghost, label.ghost { background: var(--surface); color: var(--transit); border: 1px solid var(--line); }
+label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; cursor: pointer; }
+.places .exchange { margin-top: .6rem; }
+.places #px-status:empty { display: none; }
 .dests { display: flex; flex-wrap: wrap; gap: .3rem; width: 100%; }
 .dests:empty { display: none; }
 .dest {
@@ -324,6 +327,13 @@ button.ghost { background: var(--surface); color: var(--transit); border: 1px so
     <p id="pf-error" class="error" role="alert"></p>
   </div>
   <datalist id="stop-options"></datalist>
+  <!-- Exchange: file download/upload, or a link carrying the places in its fragment. -->
+  <div class="row exchange">
+    <button type="button" id="px-export" class="ghost">Exportieren</button>
+    <button type="button" id="px-link" class="ghost">Link kopieren</button>
+    <label class="ghost file">Importieren<input type="file" id="px-import" accept="application/json,.json" hidden></label>
+  </div>
+  <p id="px-status" class="meta" role="status"></p>
 </section>
 
 <form id="form">
@@ -482,6 +492,9 @@ const DEBOUNCE_MS = 250;
 const STORAGE_KEY = "homeapprox.stations";
 const PLACES_KEY = "homeapprox.places";
 const PLACE_ICON = "⌂";
+const EXPORT_VERSION = 1;
+const SHARE_PARAM = "places";
+const EXPORT_FILE = "homeapprox-orte.json";
 
 // ---------- TransportApi: raw HTTP, nothing else knows the API shape ----------
 
@@ -1335,7 +1348,35 @@ const Places = (() => {
 
   const remove = (name) => save(load().filter((p) => p.name !== name));
 
-  return { all, names, byName, resolve, normalize, put, remove };
+  // Exchange format, same for file and link:
+  //   { "homeapprox": 1, "places": [{ "name", "stops": [{ "name", "walkMin" }] }] }
+  const exportJson = () => JSON.stringify({ homeapprox: EXPORT_VERSION, places: load() }, null, 2);
+
+  // Merges: same name replaces, others are kept. Returns how many came in.
+  function importJson(text) {
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("Keine gültige Datei.");
+    }
+    if (!data || data.homeapprox !== EXPORT_VERSION || !Array.isArray(data.places)) {
+      throw new Error("Kein HomeApprox-Export.");
+    }
+    data.places.forEach((p) => put(normalize(String(p.name || ""), Array.isArray(p.stops) ? p.stops : [])));
+    return data.places.length;
+  }
+
+  // Share link: the export in the URL fragment, so it never hits a server.
+  const toLink = (base) => `${base}#${SHARE_PARAM}=${encodeURIComponent(exportJson())}`;
+
+  // Places carried in a fragment, or null. Does not import by itself.
+  function fromHash(hash) {
+    const m = new RegExp(`^#?(?:.*&)?${SHARE_PARAM}=([^&]+)`).exec(hash || "");
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+
+  return { all, names, byName, resolve, normalize, put, remove, exportJson, importJson, toLink, fromHash };
 })();
 
 // ---------- UI ----------
@@ -2065,9 +2106,68 @@ const PlacesEditor = (() => {
     showForm(null);
   }
 
+  const status = (text, error = false) => {
+    $("px-status").textContent = text;
+    $("px-status").className = error ? "error" : "meta";
+  };
+
+  function onExport() {
+    const blob = new Blob([Places.exportJson()], { type: "application/json" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = EXPORT_FILE;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  async function onLink() {
+    const link = Places.toLink(location.href.split("#")[0]);
+    try {
+      await navigator.clipboard.writeText(link);
+      status("Link kopiert.");
+    } catch {
+      prompt("Link kopieren:", link);
+    }
+  }
+
+  async function onImport(e) {
+    const file = e.target.files[0];
+    e.target.value = "";
+    if (!file) {
+      return;
+    }
+    importText(await file.text());
+  }
+
+  function importText(text) {
+    try {
+      const n = Places.importJson(text);
+      renderList();
+      status(`${n} Ort${n === 1 ? "" : "e"} importiert.`);
+    } catch (err) {
+      status(err.message, true);
+    }
+  }
+
+  // Opened via a share link: import, open the card, drop the fragment.
+  function importFromHash() {
+    const text = Places.fromHash(location.hash);
+    if (text === null) {
+      return;
+    }
+    $("places-panel").hidden = false;
+    $("settings").setAttribute("aria-expanded", "true");
+    importText(text);
+    history.replaceState(null, "", location.pathname + location.search);
+  }
+
   function init() {
     renderList();
     showForm(null);
+    $("px-export").addEventListener("click", onExport);
+    $("px-link").addEventListener("click", onLink);
+    $("px-import").addEventListener("change", onImport);
+    importFromHash();
     $("pf-save").addEventListener("click", onSave);
     // Enter inside the editor saves the place, not the search form.
     $("place-form").addEventListener("keydown", (e) => {

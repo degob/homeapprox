@@ -788,3 +788,16 @@ Alternativen: ± soll die Abfahrt gegenüber meiner Ankunft am Umsteigeort zeige
 ## Claude
 
 *(Aktualisiert `index.html`.)* Kopfzeile mit Titel und ⚙ (`#settings`, `aria-expanded`). Panel `#places-panel` als Karte unter der Kopfzeile, `hidden` bis zum Klick; Zahnrad färbt sich bei offenem Panel. Schritt 3 (Export/Import/URL) kommt später in dieselbe Karte.
+
+## User
+
+Weiter → Schritt 3.
+
+## Claude
+
+*(Aktualisiert `index.html`, Tests.)* Schritt 3: Export/Import/Link.
+
+- Format: `{ "homeapprox": 1, "places": [{ name, stops: [{ name, walkMin }] }] }`, für Datei und Link gleich. Import mischt: gleicher Name ersetzt, andere bleiben; jeder Ort durch `normalize()`.
+- Einstellungs-Karte: «Exportieren» (Download `homeapprox-orte.json`), «Link kopieren» (`…#places=<URL-encoded JSON>`, Zwischenablage, sonst Prompt), «Importieren» (Datei). Statuszeile.
+- Link öffnen: beim Laden `#places=` erkannt → Import, Karte auf, Fragment entfernt. Der Link erreicht keinen Server; bei vielen Orten wird er lang.
+- 68/68 Tests, 3 neu.

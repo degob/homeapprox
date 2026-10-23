@@ -790,3 +790,45 @@ describe("stored places", () => {
     assert.equal(journeys[0].toPlace, "Büro");
   });
 });
+
+// ---------- Places exchange: file and share link ----------
+
+describe("places exchange", () => {
+  const two = [
+    { name: "Büro", stops: [{ name: "Zürich Oerlikon", walkMin: 5 }] },
+    { name: "Gym", stops: [{ name: "Stettbach", walkMin: 7 }] },
+  ];
+
+  test("export → import round trip, same name replaces, others kept", () => {
+    const a = loadApp();
+    two.forEach((p) => a.Places.put(p));
+    const text = a.Places.exportJson();
+    assert.equal(JSON.parse(text).homeapprox, 1);
+
+    const b = loadApp();
+    b.Places.put({ name: "Büro", stops: [{ name: "Zürich Seebach", walkMin: 12 }] });
+    b.Places.put({ name: "Oma", stops: [{ name: "Bern", walkMin: 3 }] });
+    assert.equal(b.Places.importJson(text), 2);
+    assert.deepEqual(plain(b.Places.names()), ["Büro", "Gym", "Oma"]);
+    assert.equal(b.Places.byName("Büro").stops[0].name, "Zürich Oerlikon");
+  });
+
+  test("link carries the places in the fragment; fromHash gives them back", () => {
+    const a = loadApp();
+    two.forEach((p) => a.Places.put(p));
+    const link = a.Places.toLink("https://x.test/app/");
+    assert.ok(link.startsWith("https://x.test/app/#places="));
+    const hash = link.slice(link.indexOf("#"));
+    const b = loadApp();
+    assert.equal(b.Places.importJson(b.Places.fromHash(hash)), 2);
+    assert.equal(b.Places.fromHash(""), null);
+    assert.equal(b.Places.fromHash("#other=1"), null);
+  });
+
+  test("import rejects foreign or broken data", () => {
+    const app = loadApp();
+    assert.throws(() => app.Places.importJson("{not json"), /gültige/);
+    assert.throws(() => app.Places.importJson('{"places": []}'), /HomeApprox/);
+    assert.throws(() => app.Places.importJson('{"homeapprox": 1, "places": [{"name": "", "stops": []}]}'), /Name/);
+  });
+});

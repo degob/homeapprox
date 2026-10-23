@@ -58,6 +58,9 @@ export function loadApp() {
     requestAnimationFrame: (cb) => cb(),
     localStorage: storage(),
     window: { addEventListener() {}, innerHeight: 800 },
+    location: { href: "https://x.test/app/", hash: "", pathname: "/app/", search: "" },
+    history: { replaceState() {} },
+    navigator: { clipboard: { writeText: async () => {} } },
     document: {
       getElementById: (id) => elements.get(id) || elements.set(id, element()).get(id),
       addEventListener() {},
