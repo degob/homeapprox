@@ -145,6 +145,7 @@ li.clickable { cursor: pointer; }
 .places ul { list-style: none; padding: 0; margin: .5rem 0; }
 .places li { display: flex; align-items: center; gap: .5rem; padding: .3rem 0; border-bottom: 1px solid var(--line); }
 .places li .pname { color: var(--ink); font-weight: 700; }
+.places .icon-btn.on { color: var(--walk); border-color: var(--walk); }
 .places li .pstops { flex: 1; overflow-wrap: anywhere; }
 .places #place-form { display: grid; gap: .5rem; margin-top: .5rem; }
 .places .stop-row { display: flex; gap: .4rem; align-items: center; }
@@ -357,7 +358,7 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
   <!-- Von: one place (Zuhause by default). Nach: one or more, as chips. -->
   <div class="row ends">
     <div class="place">
-      <input type="text" id="origin" placeholder="Von, z. B. Zuhause" value="Zuhause" required
+      <input type="text" id="origin" placeholder="Von, z. B. Zuhause" required
              autocomplete="off" role="combobox" aria-expanded="false" aria-controls="origin-sugg">
       <ul id="origin-sugg" class="sugg" role="listbox"></ul>
     </div>
@@ -429,29 +430,15 @@ const HOME_STOPS = Object.freeze([
   { name: "Wallisellen, Säntisstrasse", walkMin: 8, secondary: true },
 ]);
 
-// Feeder lines: the API often replaces a short bus/tram ride from a home stop
-// by a walk (walk = later departure, same arrival), so it never offers them.
-// We build these ourselves: departure board for the feeder + connections from
-// the hub where it ends.
-//   Home ──walk──► stop ──line──► alight ┄change┄► hub ──API──► Place
-// stop:   HOME_STOPS name (walk time). board: timetable name of the stop where
-//         the line halts (may differ, e.g. "(Bus)"/"(Tram)").
-// alight: stop of the line near the hub. hub: station for the API query.
-const FEEDERS = Object.freeze([
-  { stop: "Wallisellen, Furtbach", board: "Wallisellen, Furtbach", lines: ["772"], mode: "bus",
-    alight: "Wallisellen, Bahnhof", hub: "Wallisellen", changeMin: 4 },
-  { stop: "Wallisellen, Ifang", board: "Wallisellen, Ifang", lines: ["787"], mode: "bus",
-    alight: "Dietlikon, Bahnhof Ost", hub: "Dietlikon", changeMin: 4 },
-  { stop: "Wallisellen, Ifang", board: "Wallisellen, Ifang", lines: ["787"], mode: "bus",
-    alight: "Zürich Oerlikon, Bahnhof Ost", hub: "Zürich Oerlikon", changeMin: 5 },
-  { stop: "Wallisellen, Glatt (Bus)", board: "Wallisellen, Glatt (Bus)", lines: ["787"], mode: "bus",
-    alight: "Zürich Oerlikon, Bahnhof Ost", hub: "Zürich Oerlikon", changeMin: 5 },
-  { stop: "Wallisellen, Glatt (Bus)", board: "Wallisellen, Glatt (Bus)", lines: ["61"], mode: "bus",
-    alight: "Zürich Oerlikon, Bahnhof", hub: "Zürich Oerlikon", changeMin: 5 },
-  { stop: "Wallisellen, Glatt (Tram)", board: "Wallisellen, Glatt (Tram)", lines: ["12"], mode: "tram",
-    alight: "Stettbach, Bahnhof", hub: "Stettbach", changeMin: 4 },
-]);
-const BOARD_LIMIT = 80;
+// Departure/arrival board per custom stop, see boardTimes(): the planner
+// hides a bus when a walk reaches the same train, so we ask again at each
+// bus/tram time within the window. Trains need no re-ask (same journeys).
+const BOARD_LIMIT = 40;
+const BOARD_MODES = Object.freeze(["bus", "tram"]);
+const BOARD_MAX_REQUERIES = 6;
+const REQUERY_LIMIT = 3;
+// Board window around the base results' times at the custom end.
+const BOARD_SLACK_MIN = 20;
 // Results always cover at least this window after (Ab) / before (An) the
 // asked time; stop queries page on until they do.
 const MIN_WINDOW_MIN = 30;
@@ -464,21 +451,19 @@ const ALT_BEFORE_MIN = 20; // alternatives at a transfer: earlier ones from arri
 const ALT_LIMIT = 6;
 const ALT_EARLIER = 3; // shown before my arrival at the transfer
 const ALT_LATER = 3; // shown after the planned departure
-const BOARD_LOOKBACK_MIN = 60; // board window before the first hub train (arrive mode)
-const FEEDER_ARRIVE_SLACK_MIN = 25; // rough feeder ride + change, toHome + arrive
-const FEEDER_MAX_WAIT_MIN = 20; // longer wait at the hub: feeder makes no sense
 
 // Place: where a journey starts or ends. A station is one stop with no walk.
-// A custom place is several stops, each with its own walk, plus feeders.
+// A custom place is several stops, each with its own walk.
 //   Zuhause ──2'──► Furtbach          station("Bern") ──0'──► Bern
 //           ──6'──► Ifang
 //           ──15'─► Wallisellen
 // Rules that apply at a custom end: the walk there is ours (an API walk
 // there means another stop was reached → drop), same vehicle boarded at
 // two of its stops is pruned to the best one, secondary stops are dropped
-// when covered, feeders are built from its boards.
-const ZUHAUSE = Object.freeze({ name: "Zuhause", custom: true, stops: HOME_STOPS, feeders: FEEDERS });
-const station = (name) => ({ name, custom: false, stops: [{ name, walkMin: 0 }], feeders: [] });
+// when covered, and its board is re-asked (see boardTimes).
+// `home`: the default "Von". Seeded into storage on first run.
+const ZUHAUSE = Object.freeze({ name: "Zuhause", custom: true, home: true, stops: HOME_STOPS });
+const station = (name) => ({ name, custom: false, stops: [{ name, walkMin: 0 }] });
 const asPlace = (p) => (typeof p === "string" ? station(p) : p);
 const Side = Object.freeze({ FROM: "from", TO: "to" });
 
@@ -486,6 +471,7 @@ const Side = Object.freeze({ FROM: "from", TO: "to" });
 // OTHER: plain A → B search, no custom end.
 const Direction = Object.freeze({ TO_HOME: "toHome", FROM_HOME: "fromHome", OTHER: "other" });
 const TimeRef = Object.freeze({ DEPART: "depart", ARRIVE: "arrive" });
+const BoardKind = Object.freeze({ DEPART: "depart", ARRIVE: "arrive" });
 const LegKind = Object.freeze({ RIDE: "ride", WALK: "walk", CHANGE: "change" });
 const TRANSFER_WALK_MAX_MIN = 5;
 const WalkMode = Object.freeze({ SHOW: "show", HIDE: "hide" });
@@ -631,7 +617,7 @@ const TransportApi = (() => {
 
   const fmtBoardTime = (d) => `${fmtDate(d)} ${fmtTime(d)}`;
 
-  // Same board requested by several feeders in one search: fetch once.
+  // Same board requested by several pairs in one search: fetch once.
   const boardCache = new Map();
   const BOARD_CACHE_MS = 60_000;
 
@@ -652,44 +638,25 @@ const TransportApi = (() => {
     return data;
   }
 
-  // Departure board: rides of `lines` from `station` that later halt at
-  // `target`, as plain ride legs station → target.
-  async function feederRides(station, target, lines, mode, at) {
+  // Bus/tram times at `station` from `at` on: departures (BoardKind.DEPART)
+  // or arrivals (BoardKind.ARRIVE), live when known. Sorted, unique.
+  async function boardTimes(station, at, kind) {
     const params = new URLSearchParams({
       station,
       datetime: fmtBoardTime(at),
       limit: String(BOARD_LIMIT),
+      type: kind === BoardKind.ARRIVE ? "arrival" : "departure",
     });
-    params.append("transportations[]", mode);
+    BOARD_MODES.forEach((m) => params.append("transportations[]", m));
     const data = await board(params);
-    return (data.stationboard || [])
-      .filter((e) => lines.includes(String(e.number)))
-      .map((e) => {
-        const stopAt = (e.passList || []).find((p) => p.station?.name === target);
-        if (!stopAt?.arrivalTimestamp) {
-          return null;
-        }
-        return {
-          kind: LegKind.RIDE,
-          line: lineLabel(e),
-          headsign: e.to || "",
-          from: e.stop.station?.name || station,
-          dep: liveTime(e.stop, "departure").at,
-          depDelayMin: liveTime(e.stop, "departure").delayMin,
-          platform: e.stop.platform || "",
-          to: target,
-          arrPlatform: stopAt.platform || "",
-          arr: liveTime(stopAt, "arrival").at,
-          arrDelayMin: liveTime(stopAt, "arrival").delayMin,
-          walkSec: 0,
-          tripId: e.name || "",
-          stops: (e.passList || []).map((p) => p.station?.name).filter(Boolean),
-        };
-      })
-      .filter(Boolean);
+    const which = kind === BoardKind.ARRIVE ? "arrival" : "departure";
+    const times = (data.stationboard || [])
+      .filter((e) => e.stop?.[`${which}Timestamp`])
+      .map((e) => liveTime(e.stop, which).at.getTime());
+    return [...new Set(times)].sort((a, b) => a - b).map((t) => new Date(t));
   }
 
-  return { connections, locations, feederRides, toTransfers };
+  return { connections, locations, boardTimes, toTransfers };
 })();
 
 // ---------- Planner: domain logic, adds walking around the transit leg ----------
@@ -731,18 +698,6 @@ const Planner = (() => {
       }
     }
     return [...seen.values()];
-  }
-
-  // Time to ask the API for, so that walking is already accounted for.
-  // E.g. leave home 08:00, walk 15 → train must depart from 08:15.
-  function queryTime(at, dir, timeRef, walkMin) {
-    if (dir === Direction.FROM_HOME && timeRef === TimeRef.DEPART) {
-      return shift(at, walkMin);
-    }
-    if (dir === Direction.TO_HOME && timeRef === TimeRef.ARRIVE) {
-      return shift(at, -walkMin);
-    }
-    return at;
   }
 
   // Which side is custom; the form's Direction for the UI (followUpSearch).
@@ -805,112 +760,83 @@ const Planner = (() => {
     return okFrom && okTo;
   }
 
-  // Legacy check by direction, used by the feeder build.
-  function homeEndIsClean(trip, dir) {
-    const legs = trip.legs;
-    if (!legs.length) {
-      return true;
-    }
-    const homeLeg = dir === Direction.FROM_HOME ? legs[0] : legs[legs.length - 1];
-    return homeLeg.kind === LegKind.RIDE;
-  }
-
   // One stop pair. Ab: the ride must leave after walking to sf.
-  // An: it must arrive before walking from st.
-  async function forPair(ends, at, timeRef) {
+  // An: it must arrive before walking from st. Returns the raw trips too
+  // (before the clean-end filter): their times frame the board window.
+  async function forPairRaw(ends, at, timeRef) {
     const { from, sf, to, st } = ends;
     const t = timeRef === TimeRef.DEPART
       ? shift(at, from.custom ? sf.walkMin : 0)
       : shift(at, -(to.custom ? st.walkMin : 0));
     const trips = await connectionsCovering(sf.name, st.name, t, timeRef);
     const query = { from: sf.name, to: st.name, at: t, timeRef };
+    const journeys = trips
+      .filter((trip) => endsAreClean(trip, from, to))
+      .map((trip) => toJourney(trip, ends, query));
+    return { trips, journeys, asked: t };
+  }
+
+  const forPair = async (ends, at, timeRef) => (await forPairRaw(ends, at, timeRef)).journeys;
+
+  // The planner returns only journeys best in arrival and changes, so a bus
+  // from a custom stop is hidden whenever walking reaches the same train.
+  // Asking again exactly at the bus's time reveals it: by then the walk
+  // can't make that train. Window at the custom end = the base results'
+  // span there; empty base → MIN_WINDOW_MIN from the asked time.
+  //   from side: departures board, query Ab at each bus departure,
+  //              keep trips whose first leg is that ride
+  //   to side:   arrivals board, query An at each bus arrival,
+  //              keep trips whose last leg is that ride
+  async function forPairBoard(ends, side, base, at, timeRef) {
+    const { from, sf, to, st } = ends;
+    const fromSide = side === Side.FROM;
+    const stop = fromSide ? sf : st;
+    // Window: the raw trips' times at this end, plus the asked window when
+    // the user's time refers to this end, ± slack.
+    const times = base.trips.map((trip) => (fromSide ? trip.dep : trip.arr).getTime());
+    const askedHere = fromSide ? timeRef === TimeRef.DEPART : timeRef === TimeRef.ARRIVE;
+    if (askedHere) {
+      times.push(base.asked.getTime(), shift(base.asked, fromSide ? MIN_WINDOW_MIN : -MIN_WINDOW_MIN).getTime());
+    }
+    if (!times.length) {
+      return [];
+    }
+    const lo = shift(new Date(Math.min(...times)), -BOARD_SLACK_MIN);
+    const hi = shift(new Date(Math.max(...times)), BOARD_SLACK_MIN);
+
+    const kind = fromSide ? BoardKind.DEPART : BoardKind.ARRIVE;
+    const board = await TransportApi.boardTimes(stop.name, lo, kind);
+    const picked = board.filter((t) => t >= lo && t <= hi).slice(0, BOARD_MAX_REQUERIES);
+
+    const ref = fromSide ? TimeRef.DEPART : TimeRef.ARRIVE;
+    const settled = await Promise.allSettled(
+      picked.map((t) => TransportApi.connections(sf.name, st.name, t, ref, REQUERY_LIMIT))
+    );
+    const matches = (trip, t) => {
+      const legs = trip.legs;
+      const leg = fromSide ? legs[0] : legs[legs.length - 1];
+      const when = fromSide ? leg?.dep : leg?.arr;
+      return leg?.kind === LegKind.RIDE && when?.getTime() === t.getTime();
+    };
+    const query = { from: sf.name, to: st.name, at: lo, timeRef, board: stop.name };
+    let trips = [];
+    settled.forEach((r, i) => {
+      if (r.status === "fulfilled") {
+        trips = trips.concat(r.value.filter((trip) => matches(trip, picked[i])));
+      }
+    });
     return trips
       .filter((trip) => endsAreClean(trip, from, to))
       .map((trip) => toJourney(trip, ends, query));
   }
 
-  // Feeder trip = feeder ride + hub trip (fromHome) or hub trip + feeder ride
-  // (toHome). Matched so the change at the hub takes at least changeMin.
-  //   fromHome: latest ride with arr + change ≤ hub dep
-  //   toHome:   earliest ride with dep ≥ hub arr + change
-  // Hub trip that rides the feeder line again or passes the feeder's own stop
-  // goes back the way we came: nonsense. E.g. T12 Glatt → Stettbach, then
-  // T12 Stettbach → Flughafen through Glatt again.
-  function backtracks(hubTrip, f) {
-    return hubTrip.legs.some((l) => l.kind === LegKind.RIDE &&
-      (f.lines.includes(l.line.replace(/^T/, "")) || f.lines.includes(l.line) || l.stops.includes(f.board)));
-  }
-
-  function joinFeeder(hubTrip, rides, f, dir) {
-    const fromHome = dir === Direction.FROM_HOME;
-    const ride = fromHome
-      ? rides.filter((r) => shift(r.arr, f.changeMin) <= hubTrip.dep).sort((a, b) => b.arr - a.arr)[0]
-      : rides.filter((r) => r.dep >= shift(hubTrip.arr, f.changeMin)).sort((a, b) => a.dep - b.dep)[0];
-    if (!ride || backtracks(hubTrip, f)) {
-      return null;
-    }
-    const wait = fromHome ? minutesBetween(ride.arr, hubTrip.dep) : minutesBetween(hubTrip.arr, ride.dep);
-    if (wait > FEEDER_MAX_WAIT_MIN) {
-      return null;
-    }
-    const legs = fromHome ? [ride, ...hubTrip.legs] : [...hubTrip.legs, ride];
-    const rideLines = [...new Set(legs.filter((l) => l.kind === LegKind.RIDE).map((l) => l.line))];
-    return {
-      from: fromHome ? ride.from : hubTrip.from,
-      to: fromHome ? hubTrip.to : ride.to,
-      dep: fromHome ? ride.dep : hubTrip.dep,
-      arr: fromHome ? hubTrip.arr : ride.arr,
-      lines: rideLines.join(", "),
-      transfers: TransportApi.toTransfers(legs),
-      legs,
-    };
-  }
-
-  // One feeder: hub connections + departure board, sequenced so the board
-  // window covers the hub trains (fromHome) or hub arrivals (toHome).
-  // `home`: the custom place the feeder belongs to; `far`: { place, stop }
-  // at the other end (its walk is added when that place is custom too).
-  async function forFeeder(f, home, far, at, dir, timeRef) {
-    const stop = home.stops.find((s) => s.name === f.stop);
-    const fromHome = dir === Direction.FROM_HOME;
-    const place = far.stop.name;
-    const [boardAt, target] = fromHome ? [f.board, f.alight] : [f.alight, f.board];
-    const [from, to] = fromHome ? [f.hub, place] : [place, f.hub];
-    let hubTrips;
-    let rides;
-    let hubTime;
-
-    if (fromHome && timeRef === TimeRef.DEPART) {
-      rides = await TransportApi.feederRides(boardAt, target, f.lines, f.mode, shift(at, stop.walkMin));
-      if (!rides.length) {
-        return [];
-      }
-      hubTime = shift(rides[0].arr, f.changeMin);
-      hubTrips = await connectionsCovering(from, to, hubTime, timeRef);
-    } else {
-      hubTime = !fromHome && timeRef === TimeRef.ARRIVE
-        ? shift(at, -stop.walkMin - FEEDER_ARRIVE_SLACK_MIN)
-        : at;
-      hubTrips = await connectionsCovering(from, to, hubTime, timeRef);
-      hubTrips = hubTrips.filter((t) => homeEndIsClean(t, dir));
-      if (!hubTrips.length) {
-        return [];
-      }
-      const boardTime = fromHome
-        ? shift(new Date(Math.min(...hubTrips.map((t) => t.dep))), -BOARD_LOOKBACK_MIN)
-        : shift(new Date(Math.min(...hubTrips.map((t) => t.arr))), f.changeMin);
-      rides = await TransportApi.feederRides(boardAt, target, f.lines, f.mode, boardTime);
-    }
-
-    const query = { from, to, at: hubTime, timeRef, feeder: `${f.lines.join("/")} ${f.board} ↔ ${f.alight}` };
-    const ends = fromHome
-      ? { from: home, sf: stop, to: far.place, st: far.stop }
-      : { from: far.place, sf: far.stop, to: home, st: stop };
-    return hubTrips
-      .filter((t) => homeEndIsClean(t, dir))
-      .map((t) => joinFeeder(t, rides, f, dir))
-      .filter(Boolean)
-      .map((trip) => toJourney(trip, ends, query));
+  // One stop pair, complete: base query, then the board re-asks for each
+  // custom side.
+  async function forPairFull(ends, at, timeRef) {
+    const base = await forPairRaw(ends, at, timeRef);
+    const sides = [[Side.FROM, ends.from], [Side.TO, ends.to]].filter(([, p]) => p.custom);
+    const extra = await Promise.all(sides.map(([side]) => forPairBoard(ends, side, base, at, timeRef)));
+    return base.journeys.concat(...extra);
   }
 
   // Vehicle identity: API trip name (same bus at another stop has another time).
@@ -971,7 +897,7 @@ const Planner = (() => {
     return journeys.filter((j) => !drop.has(j));
   }
 
-  // Same rides at the same times = same journey (API result and feeder build
+  // Same rides at the same times = same journey (base query and board re-ask
   // can coincide); the first one wins.
   function dedupe(journeys) {
     const seen = new Set();
@@ -988,7 +914,7 @@ const Planner = (() => {
     });
   }
 
-  // Queries all stops and feeders in parallel; one failing doesn't block the others.
+  // After all pairs are queried:
   // Duplicates, covered secondary stops, dominated boardings; sorted.
   // Secondary check first: a covered secondary stop must not win the
   // dominance comparison against the primary stop it duplicates.
@@ -1059,30 +985,15 @@ const Planner = (() => {
     return out.sort((a, b) => a.start - b.start);
   }
 
-  // Core: every stop pair of the two places plus the feeders of each custom
-  // end, all in parallel; one failing task doesn't block the others.
-  //   from.stops × to.stops          → forPair
-  //   from.feeders × to.stops        → forFeeder (fromHome)
-  //   from.stops × to.feeders        → forFeeder (toHome)
+  // Core: every stop pair of the two places (base query + board re-asks at
+  // custom ends), all in parallel; one failing pair doesn't block the others.
+  //   from.stops × to.stops → forPairFull
   async function planPlaces(from, to, at, timeRef) {
     const tasks = [];
     from.stops.forEach((sf) => to.stops.forEach((st) => tasks.push({
       label: from.custom && !to.custom ? sf.name : to.custom && !from.custom ? st.name : `${sf.name} → ${st.name}`,
-      run: () => forPair({ from, sf, to, st }, at, timeRef),
+      run: () => forPairFull({ from, sf, to, st }, at, timeRef),
     })));
-    const feederLabel = (f) => `${f.stop} (${f.lines.join("/")} → ${f.hub})`;
-    if (from.custom) {
-      from.feeders.forEach((f) => to.stops.forEach((st) => tasks.push({
-        label: feederLabel(f),
-        run: () => forFeeder(f, from, { place: to, stop: st }, at, Direction.FROM_HOME, timeRef),
-      })));
-    }
-    if (to.custom) {
-      to.feeders.forEach((f) => from.stops.forEach((sf) => tasks.push({
-        label: feederLabel(f),
-        run: () => forFeeder(f, to, { place: from, stop: sf }, at, Direction.TO_HOME, timeRef),
-      })));
-    }
     const settled = await Promise.allSettled(tasks.map((t) => t.run()));
 
     const failed = [];
@@ -1192,7 +1103,7 @@ const Planner = (() => {
 
   // Onward connections from a transfer stop to the journey's last station,
   // around the planned one. Arrival there (`x.from`) splits them:
-  //   EARLIER: leaves before I arrive → only if my feeder is late
+  //   EARLIER: leaves before I arrive → only if my first ride is late
   //   PLANNED: same first ride as the proposal
   //   LATER:   fallback if I miss it
   //
@@ -1327,11 +1238,24 @@ const Stations = (() => {
 // ---------- Places: custom places (several stops + walk), persisted ----------
 
 const Places = (() => {
+  // Stored form of ZUHAUSE, used to seed an empty storage.
+  const seed = () => [{
+    name: ZUHAUSE.name,
+    home: true,
+    stops: ZUHAUSE.stops.map((s) => ({ name: s.name, walkMin: s.walkMin, ...(s.secondary ? { secondary: true } : {}) })),
+  }];
+
+  // First run (key absent) gets Zuhause; an emptied list stays empty.
   const load = () => {
     try {
-      return JSON.parse(localStorage.getItem(PLACES_KEY)) || [];
+      const raw = localStorage.getItem(PLACES_KEY);
+      if (raw === null) {
+        save(seed());
+        return seed();
+      }
+      return JSON.parse(raw) || [];
     } catch {
-      return [];
+      return seed();
     }
   };
   const save = (list) => {
@@ -1342,47 +1266,55 @@ const Places = (() => {
     }
   };
 
-  // Stored shape is the data only; `custom` and `feeders` are added on read.
-  const toPlace = (p) => ({ name: p.name, custom: true, feeders: [], stops: p.stops });
+  // Stored shape is the data only; `custom` is added on read.
+  const toPlace = (p) => ({ name: p.name, custom: true, home: Boolean(p.home), stops: p.stops });
 
-  // Zuhause is always first and fixed (code, with feeders); the rest stored.
-  const all = () => [ZUHAUSE, ...load().map(toPlace)];
+  // Home place first, then by name.
+  const all = () => load().map(toPlace).sort((a, b) => Number(b.home) - Number(a.home) || a.name.localeCompare(b.name, "de"));
   const names = () => all().map((p) => p.name);
   const byName = (name) => all().find((p) => p.name === name) || null;
-  const isFixed = (name) => name === ZUHAUSE.name;
+  const home = () => all().find((p) => p.home) || null;
 
   // A name typed or picked in a place field: custom place if one matches,
   // else a plain station.
   const resolve = (name) => byName(name) || station(name);
 
-  // Validated { name, stops }; throws a message for the form.
-  function normalize(name, stops) {
+  // Validated { name, stops, home? }; throws a message for the form.
+  // Stop: { name, walkMin, secondary? } — secondary stops are dropped when
+  // their vehicle is already covered, see dropCoveredSecondary().
+  function normalize(name, stops, home = false) {
     const n = name.trim();
     if (!n) {
       throw new Error("Name fehlt.");
     }
-    if (isFixed(n)) {
-      throw new Error(`${n} ist fest.`);
-    }
     const clean = stops
-      .map((s) => ({ name: s.name.trim(), walkMin: Math.max(0, Math.round(Number(s.walkMin) || 0)) }))
+      .map((s) => ({
+        name: String(s.name || "").trim(),
+        walkMin: Math.max(0, Math.round(Number(s.walkMin) || 0)),
+        ...(s.secondary ? { secondary: true } : {}),
+      }))
       .filter((s) => s.name);
     if (!clean.length) {
       throw new Error("Mindestens eine Haltestelle.");
     }
-    return { name: n, stops: clean };
+    return { name: n, stops: clean, ...(home ? { home: true } : {}) };
   }
 
-  // Insert or replace (by `oldName` when renaming).
+  // Insert or replace (by `oldName` when renaming). Only one home.
   function put(place, oldName = place.name) {
-    const rest = load().filter((p) => p.name !== oldName && p.name !== place.name);
-    save([...rest, place].sort((a, b) => a.name.localeCompare(b.name, "de")));
+    const rest = load()
+      .filter((p) => p.name !== oldName && p.name !== place.name)
+      .map((p) => (place.home ? { ...p, home: false } : p));
+    save([...rest, place]);
   }
+
+  // Marks `name` as the default "Von".
+  const setHome = (name) => save(load().map((p) => ({ ...p, home: p.name === name })));
 
   const remove = (name) => save(load().filter((p) => p.name !== name));
 
   // Exchange format, same for file and link:
-  //   { "homeapprox": 1, "places": [{ "name", "stops": [{ "name", "walkMin" }] }] }
+  //   { "homeapprox": 1, "places": [{ "name", "home"?, "stops": [{ "name", "walkMin", "secondary"? }] }] }
   const exportJson = () => JSON.stringify({ homeapprox: EXPORT_VERSION, places: load() }, null, 2);
 
   // Merges: same name replaces, others are kept. Returns how many came in.
@@ -1396,7 +1328,7 @@ const Places = (() => {
     if (!data || data.homeapprox !== EXPORT_VERSION || !Array.isArray(data.places)) {
       throw new Error("Kein HomeApprox-Export.");
     }
-    data.places.forEach((p) => put(normalize(String(p.name || ""), Array.isArray(p.stops) ? p.stops : [])));
+    data.places.forEach((p) => put(normalize(String(p.name || ""), Array.isArray(p.stops) ? p.stops : [], Boolean(p.home))));
     return data.places.length;
   }
 
@@ -1409,7 +1341,7 @@ const Places = (() => {
     return m ? decodeURIComponent(m[1]) : null;
   }
 
-  return { all, names, byName, isFixed, resolve, normalize, put, remove, exportJson, importJson, toLink, fromHash };
+  return { all, names, byName, home, setHome, resolve, normalize, put, remove, exportJson, importJson, toLink, fromHash };
 })();
 
 // ---------- UI ----------
@@ -1421,6 +1353,7 @@ const minutes = (a, b) => Math.round((b - a) / MS_PER_MIN);
 const localDateValue = (d) => new Date(d.getTime() - d.getTimezoneOffset() * MS_PER_MIN).toISOString().slice(0, 10);
 
 function initInputs() {
+  $("origin").value = Places.home()?.name || "";
   const now = new Date();
   $("date").value = localDateValue(now);
   $("time").value = hhmm(now);
@@ -1705,8 +1638,8 @@ function renderDetails(j) {
   const q = document.createElement("div");
   q.className = "meta";
   const ref = j.query.timeRef === TimeRef.ARRIVE ? "an" : "ab";
-  const feeder = j.query.feeder ? ` + Zubringer ${j.query.feeder}` : "";
-  q.textContent = `Abfrage: ${j.query.from} → ${j.query.to}, ${ref} ${hhmm(j.query.at)}${feeder}`;
+  const board = j.query.board ? ` · via Abfahrtstafel ${j.query.board}` : "";
+  q.textContent = `Abfrage: ${j.query.from} → ${j.query.to}, ${ref} ${hhmm(j.query.at)}${board}`;
 
   box.addEventListener("click", (e) => e.stopPropagation());
   box.append(legs);
@@ -2124,13 +2057,19 @@ const PlacesEditor = (() => {
     walk.placeholder = "Min.";
     walk.value = stop.walkMin;
     walk.setAttribute("aria-label", "Gehminuten");
+    // Secondary: only shown when its vehicle isn't already in another journey.
+    const sec = document.createElement("input");
+    sec.type = "checkbox";
+    sec.checked = Boolean(stop.secondary);
+    sec.title = "Nebenhaltestelle: nur wenn ihr Bus nicht schon über eine andere Haltestelle erreicht wird";
+    sec.setAttribute("aria-label", "Nebenhaltestelle");
     const rm = document.createElement("button");
     rm.type = "button";
     rm.className = "rm";
     rm.textContent = "×";
     rm.setAttribute("aria-label", "Haltestelle entfernen");
     rm.addEventListener("click", () => row.remove());
-    row.append(name, walk, "Min.", rm);
+    row.append(name, walk, "Min.", sec, rm);
     return row;
   }
 
@@ -2153,10 +2092,11 @@ const PlacesEditor = (() => {
 
   function readForm() {
     const stops = [...$("pf-stops").querySelectorAll(".stop-row")].map((r) => {
-      const [name, walk] = r.querySelectorAll("input");
-      return { name: name.value, walkMin: walk.value };
+      const [name, walk, sec] = r.querySelectorAll("input");
+      return { name: name.value, walkMin: walk.value, secondary: sec.checked };
     });
-    return Places.normalize($("pf-name").value, stops);
+    const keepHome = editing !== null && Places.byName(editing)?.home;
+    return Places.normalize($("pf-name").value, stops, keepHome);
   }
 
   function showForm(place) {
@@ -2177,14 +2117,14 @@ const PlacesEditor = (() => {
       name.textContent = p.name;
       const stops = document.createElement("span");
       stops.className = "pstops";
-      stops.textContent = p.stops.map((s) => `${s.name} ${s.walkMin}'`).join(" · ");
-      li.append(name, stops);
-      if (!Places.isFixed(p.name)) {
-        li.append(
-          iconButton("✎", "Bearbeiten", () => showForm(p)),
-          iconButton("×", "Löschen", () => { Places.remove(p.name); renderList(); showForm(null); })
-        );
-      }
+      stops.textContent = p.stops.map((s) => `${s.name} ${s.walkMin}'${s.secondary ? " (neben)" : ""}`).join(" · ");
+      // ★ marks the default "Von"; click another to move it.
+      const star = iconButton("★", p.home ? "Standard-Von" : "Als Standard-Von", () => { Places.setHome(p.name); renderList(); });
+      star.classList.toggle("on", p.home);
+      li.append(star, name, stops,
+        iconButton("✎", "Bearbeiten", () => showForm(p)),
+        iconButton("×", "Löschen", () => { Places.remove(p.name); renderList(); showForm(null); })
+      );
       ul.append(li);
     });
   }

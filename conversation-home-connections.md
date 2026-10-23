@@ -871,3 +871,65 @@ Ankunftsgleis an Zwischenhalten zeigen; «Gleis/Kante» durch Symbol ersetzen.
 ## Claude
 
 *(Aktualisiert `index.html`.)* Abschnitt hat `arrPlatform` (`s.arrival.platform`, bei Zubringern `passList`-Halt). Detailtabelle: Gleisnummer als kleines Schild (Zahl im Rahmen) unter Abfahrts- und Ankunftshalt, Tooltip «Gleis/Kante N».
+
+---
+
+## User
+
+Zuhause als normaler eigener Ort? Was war das Problem? Kann man der API sagen «nicht laufen»?
+
+## Claude
+
+Nur Daten sind speziell: Zubringer (`FEEDERS`), `secondary`-Flag, Standard-«Von», alles im Code. Die API hat keinen Parameter gegen Fusswege; `accessibility=independent_boarding` geprüft (Furtbach → Zürich HB): alle vier Verbindungen beginnen weiterhin mit Fussweg, kein 772. Zubringer bleiben nötig.
+
+Der API-Dump bestätigt die Feldformen aus dem Gedächtnis: `prognosis.departure` ISO-String, `walk.duration` Sekunden, `journey.name` Trip-ID, `platform` auch an `passList`-Halten.
+
+Vorschlag C: Zubringer und `secondary` ins gespeicherte Format (Editor zeigt sie nur an; ändern via Export → JSON → Import), Zuhause beim ersten Start in den Speicher übernehmen, `home`-Flag für das Standard-«Von».
+
+## User
+
+Online recherchieren: lässt sich das Fussweg-Problem im API-Aufruf lösen? Brainstorm.
+
+## Claude
+
+Doku gelesen (transport.opendata.ch/docs.html, Stand Okt 2026):
+
+- Seit 5.10.2026 eigener Planer (MOTIS, GTFS von opentransportdata.swiss), kein search.ch mehr. Parameter: `from, to, via[] (≤2), date, time, isArrivalTime, transportations[], limit, page, sharedMobility`. Kein `accessibility`, nichts gegen Fusswege.
+- Fusswege über OSM, bis 20 Min.; Resultate «best in arrival time and number of changes» (Pareto). Darum fehlt 772: Fussweg → S14 (0 Umstiege) kommt gleich an wie 772 → S14 (1 Umstieg) → dominiert. Bus erscheint nur, wenn er einen früheren Zug erreicht.
+- Ideen: (1) prüfen, ob der neue Planer 772 zeigt, wenn der Bus den Fussweg schlägt (search.ch tat es nie); (2) Koordinate als `from` → API macht den Haltestellen-Fächer selbst, aber nur Pareto-beste; (3) `transportations[]=bus` für den ersten Abschnitt, schwächer als Abfahrtstafel; (4) `via` ändert den Modus nicht; (5) `page` = spätere Abfahrten; (6) eigener MOTIS = Server.
+- Fazit: im Aufruf nicht lösbar. Experimente 1 und 2 vor Variante C.
+
+## User
+
+Drei Testabfragen ausgeführt (Abfahrtstafel Furtbach; Verbindungen ab 16:14; Koordinate als `from`).
+
+## Claude
+
+- 772 fährt :17/:47 zum Bahnhof. Abfrage 16:14 liefert `772 16:17 → Wallisellen, Bahnhof → Fuss 2' → S8 16:26 → HB 16:35`. Um 15:52 fehlte er, weil Fussweg 16:10 denselben Zug mit 0 Umstiegen erreicht → dominiert. Regel: Bus erscheint, sobald die Abfragezeit nach dem nötigen Losgehzeitpunkt liegt.
+- Koordinate als `from`: Planer fächert selbst auf (Furtbach + 772, Glatt + T12, Wallisellen zu Fuss), OSM-Gehzeiten (17' statt unserer 15').
+- Folgerung: Zubringer-Konfiguration ersetzbar durch «Abfahrtstafel pro Haltestelle → `/connections` zu jeder Abfahrtszeit»; API setzt Bus + Umsteigefussweg + Zug selbst zusammen. Konfigurationsfrei, gilt für jeden Ort → Zuhause wird gewöhnlich. Eigene Gehminuten und Nicht-Pareto-Optionen (Fussweg vs. Bus zum selben Zug) bleiben der Mehrwert der App.
+- Vorschlag statt C: FEEDERS/joinFeeder entfernen, generisches Re-Query je Abfahrt; `secondary` als optionales Flag; Zuhause in den Speicher seeden. Optional später: Koordinate pro Ort für «API-Sicht».
+
+## User
+
+Go.
+
+## Claude
+
+*(Aktualisiert `index.html`, Tests.)* Zubringer-Konfiguration ersetzt, Zuhause gewöhnlich.
+
+```
+Pro Haltestellen-Paar (sf → st):
+  Basis   /connections ab t (+ Gehzeit)          → Journeys (API-Fussweg am eigenen Ende verworfen)
+  Tafel   eigenes Ende: Bus/Tram-Zeiten im Fenster [min(Basis) − 20', max(Basis) + 20']
+          Von-Seite: Abfahrten → /connections Ab zu jeder Zeit, nur Trips, deren erster Abschnitt diese Fahrt ist
+          Nach-Seite: Ankünfte → /connections An zu jeder Zeit, nur Trips, deren letzter Abschnitt diese Fahrt ist
+  max. 6 Nachfragen pro Haltestelle, limit 3, Doppelte via dedupe
+```
+
+- Weg: `FEEDERS`, `forFeeder`, `joinFeeder`, `backtracks`, `homeEndIsClean`, `queryTime`, Zubringer-Konstanten. Neu: `TransportApi.boardTimes(station, at, BoardKind)`, `forPairRaw/forPairBoard/forPairFull`.
+- `Places`: leerer Speicher wird mit Zuhause (inkl. `secondary`, `home: true`) gefüllt; Zuhause editier-, lösch-, umbenennbar. `home`-Flag = Standard-Von (★ in der Liste, `Places.home()/setHome()`), nur eines. Stop-Zeile mit Checkbox «Nebenhaltestelle».
+- Export-Format: `{ name, home?, stops: [{ name, walkMin, secondary? }] }`.
+- Details-Zeile «Abfrage: … · via Abfahrtstafel Furtbach» bei nachgefragten Verbindungen.
+- Tests: Zubringer-Block ersetzt durch «board re-asks» (5), 66/66.
+- Offen: Umsteigezeit am Hub kommt jetzt von der API (vorher `changeMin` je Zubringer); Fenster-Slack 20' ist geraten.

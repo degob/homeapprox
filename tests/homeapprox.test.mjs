@@ -18,7 +18,8 @@ function connectionsFor(app, table) {
       const hit = table[`${p.get("from")}→${p.get("to")}`];
       return hit ? { connections: typeof hit === "function" ? hit(p) : hit } : undefined;
     }
-    return table[`board:${p.get("station")}`] ? { stationboard: table[`board:${p.get("station")}`] } : undefined;
+    const key = `${p.get("type") === "arrival" ? "arrboard" : "board"}:${p.get("station")}`;
+    return table[key] ? { stationboard: table[key] } : undefined;
   });
 }
 
@@ -299,96 +300,88 @@ describe("visible()", () => {
 
 // ---------- Feeder buses (772 & co.) ----------
 
-describe("feeders", () => {
-  // Furtbach 772 10:17 → Wallisellen, Bahnhof 10:26, then S14 10:39 from Wallisellen.
-  const board772 = [boardEntry("B", "772", "Wallisellen, Furtbach", [10, 17], [["Wallisellen, Bahnhof", [10, 26]]], "772a")];
+describe("board re-asks (buses hidden behind a walk)", () => {
+  // Furtbach: bus 772 at 10:17 → Wallisellen, Bahnhof 10:26; S14 10:39 from Wallisellen.
+  // The planner never offers 772 → S14 from 10:00 (walk 17 min reaches the same
+  // train with no change), but does when asked exactly at 10:17.
+  const bus772 = conn(
+    ride("B", "772", "Wallisellen, Furtbach", [10, 17], "Wallisellen, Bahnhof", [10, 26], { trip: "772a" }),
+    walk("Wallisellen, Bahnhof", [10, 26], "Wallisellen", [10, 28]),
+    ride("S", "14", "Wallisellen", [10, 39], "Rigi Kulm", [12, 34], { trip: "s14-39" }),
+  );
+  const walkToS14 = conn(
+    walk("Wallisellen, Furtbach", [10, 22], "Wallisellen", [10, 39]),
+    ride("S", "14", "Wallisellen", [10, 39], "Rigi Kulm", [12, 34], { trip: "s14-39" }),
+  );
+  const furtbach = (p) => (p.get("time") === "10:17" ? [bus772] : [walkToS14]);
 
-  test("772 + S14 is built although the API only offers walking", async () => {
+  test("from home: the bus appears when asked at its departure; the walk option stays", async () => {
     const app = loadApp();
     connectionsFor(app, {
-      "board:Wallisellen, Furtbach": board772,
-      "Wallisellen→Rigi Kulm": [conn(ride("S", "14", "Wallisellen", [10, 39], "Rigi Kulm", [12, 34]))],
+      "board:Wallisellen, Furtbach": [boardEntry("B", "772", "Wallisellen, Furtbach", [10, 17], [["Wallisellen, Bahnhof", [10, 26]]], "772a")],
+      "Wallisellen, Furtbach→Rigi Kulm": furtbach,
+      "Wallisellen→Rigi Kulm": [conn(ride("S", "14", "Wallisellen", [10, 39], "Rigi Kulm", [12, 34], { trip: "s14-39" }))],
     });
     const { journeys } = await app.Planner.plan("Rigi Kulm", at(10, 0), "fromHome", "depart");
     const viaBus = journeys.find((j) => j.homeStop === "Wallisellen, Furtbach");
-    assert.ok(viaBus, "feeder journey missing");
+    assert.ok(viaBus, "bus journey missing");
     assert.deepEqual(rides(viaBus), ["772", "S14"]);
     assert.equal(hm(viaBus.start), "10:15"); // 2 min walk to Furtbach
-    // The walking option via Wallisellen stays too.
+    assert.equal(viaBus.query.board, "Wallisellen, Furtbach");
     assert.ok(journeys.some((j) => j.homeStop === "Wallisellen" && hm(j.start) === "10:24"));
+    const asks = app.requests.filter((r) => r.path === "connections" && r.params.get("from") === "Wallisellen, Furtbach");
+    assert.ok(asks.some((r) => r.params.get("time") === "10:17" && r.params.get("limit") === "3"));
   });
 
-  test("way home: S14 to Wallisellen, then 772 to Furtbach", async () => {
+  test("board asks for bus and tram only, departures", async () => {
     const app = loadApp();
+    connectionsFor(app, {});
+    await app.Planner.plan("Rigi Kulm", at(10, 0), "fromHome", "depart");
+    const boards = app.requests.filter((r) => r.path === "stationboard");
+    assert.ok(boards.length >= app.HOME_STOPS.length);
+    boards.forEach((r) => {
+      assert.deepEqual(r.params.getAll("transportations[]"), ["bus", "tram"]);
+      assert.equal(r.params.get("type"), "departure");
+    });
+  });
+
+  test("way home: arrivals board, asked An at the bus's arrival", async () => {
+    const app = loadApp();
+    const s14 = ride("S", "14", "Rigi Kulm", [8, 39], "Wallisellen", [10, 30], { trip: "s14-h" });
     connectionsFor(app, {
-      "Rigi Kulm→Wallisellen": [conn(ride("S", "14", "Rigi Kulm", [8, 39], "Wallisellen", [10, 30]))],
-      "board:Wallisellen, Bahnhof": [boardEntry("B", "772", "Wallisellen, Bahnhof", [10, 37], [["Wallisellen, Furtbach", [10, 44]]])],
+      "Rigi Kulm→Wallisellen, Furtbach": (p) => (p.get("isArrivalTime") === "1" && p.get("time") === "10:44"
+        ? [conn(s14, walk("Wallisellen", [10, 30], "Wallisellen, Bahnhof", [10, 32]),
+            ride("B", "772", "Wallisellen, Bahnhof", [10, 37], "Wallisellen, Furtbach", [10, 44], { trip: "772h" }))]
+        : [conn(s14, walk("Wallisellen", [10, 30], "Wallisellen, Furtbach", [10, 47]))]),
+      "arrboard:Wallisellen, Furtbach": [{ category: "B", number: "772", stop: { station: { name: "Wallisellen, Furtbach" }, arrivalTimestamp: ts(10, 44) } }],
     });
     const { journeys } = await app.Planner.plan("Rigi Kulm", at(8, 0), "toHome", "depart");
     const viaBus = journeys.find((j) => j.homeStop === "Wallisellen, Furtbach");
-    assert.ok(viaBus);
+    assert.ok(viaBus, "bus journey missing");
     assert.deepEqual(rides(viaBus), ["S14", "772"]);
     assert.equal(hm(viaBus.end), "10:46");
+    const boards = app.requests.filter((r) => r.path === "stationboard" && r.params.get("station") === "Wallisellen, Furtbach");
+    assert.ok(boards.every((r) => r.params.get("type") === "arrival"));
   });
 
-  test("bus that leaves too late for the change is not used", async () => {
+  test("re-ask that only yields the walk again adds nothing", async () => {
     const app = loadApp();
     connectionsFor(app, {
-      // Arrives 10:37, change 4 min → 10:41 > 10:39.
-      "board:Wallisellen, Furtbach": [boardEntry("B", "772", "Wallisellen, Furtbach", [10, 28], [["Wallisellen, Bahnhof", [10, 37]]])],
-      "Wallisellen→Rigi Kulm": [conn(ride("S", "14", "Wallisellen", [10, 39], "Rigi Kulm", [12, 34]))],
+      "board:Wallisellen, Furtbach": [boardEntry("B", "772", "Wallisellen, Furtbach", [10, 17], [["Wallisellen, Sportzentrum", [10, 20]]])],
+      "Wallisellen, Furtbach→Rigi Kulm": () => [walkToS14], // bus goes the wrong way: planner still walks
     });
     const { journeys } = await app.Planner.plan("Rigi Kulm", at(10, 0), "fromHome", "depart");
     assert.equal(journeys.filter((j) => j.homeStop === "Wallisellen, Furtbach").length, 0);
   });
 
-  test(`wait at the hub over ${20} min: no feeder journey`, async () => {
+  test(`at most ${6} re-asks per stop`, async () => {
     const app = loadApp();
-    connectionsFor(app, {
-      "board:Wallisellen, Furtbach": board772,
-      // 10:26 arrival, train 10:54 = 28 min wait.
-      "Wallisellen→Rigi Kulm": [conn(ride("S", "14", "Wallisellen", [10, 54], "Rigi Kulm", [12, 49]))],
-    });
-    const { journeys } = await app.Planner.plan("Rigi Kulm", at(10, 0), "fromHome", "depart");
-    assert.equal(journeys.filter((j) => j.homeStop === "Wallisellen, Furtbach").length, 0);
-  });
-
-  test("other lines on the board are ignored", async () => {
-    const app = loadApp();
-    const rides772 = await (async () => {
-      connectionsFor(app, {
-        "board:Wallisellen, Bahnhof": [
-          boardEntry("B", "759", "Wallisellen, Bahnhof", [10, 2], [["Wallisellen, Furtbach", [10, 8]]]),
-          boardEntry("B", "772", "Wallisellen, Bahnhof", [10, 7], [["Wallisellen, Florastrasse", [10, 8]], ["Wallisellen, Furtbach", [10, 14]]]),
-          boardEntry("B", "772", "Wallisellen, Bahnhof", [10, 37], [["Wallisellen, Sportzentrum", [10, 50]]]),
-        ],
-      });
-      return app.TransportApi.feederRides("Wallisellen, Bahnhof", "Wallisellen, Furtbach", ["772"], "bus", at(10, 0));
-    })();
-    assert.equal(rides772.length, 1);
-    assert.equal(hm(rides772[0].arr), "10:14");
-  });
-
-  test("backtracking: T12 to Stettbach, then T12 back past Glatt is dropped", async () => {
-    const app = loadApp();
-    connectionsFor(app, {
-      "board:Wallisellen, Glatt (Tram)": [boardEntry("T", "12", "Wallisellen, Glatt (Tram)", [9, 35], [["Stettbach, Bahnhof", [9, 41]]])],
-      // No stop list: the "same line again" rule alone must catch it.
-      "Stettbach→Zürich Flughafen": [conn(ride("T", "12", "Stettbach, Bahnhof", [9, 49], "Zürich Flughafen, Bahnhof", [10, 13]))],
-    });
-    const { journeys } = await app.Planner.plan("Zürich Flughafen", at(9, 20), "fromHome", "depart");
-    assert.equal(journeys.length, 0);
-  });
-
-  test("backtracking via another line passing the feeder stop is dropped too", async () => {
-    const app = loadApp();
-    connectionsFor(app, {
-      "board:Wallisellen, Glatt (Tram)": [boardEntry("T", "12", "Wallisellen, Glatt (Tram)", [9, 35], [["Stettbach, Bahnhof", [9, 41]]])],
-      "Stettbach→X": [conn(ride("B", "999", "Stettbach, Bahnhof", [9, 49], "X", [10, 13],
-        { stops: ["Stettbach, Bahnhof", "Wallisellen, Glatt (Tram)"] }))],
-    });
-    const { journeys } = await app.Planner.plan("X", at(9, 20), "fromHome", "depart");
-    assert.equal(journeys.length, 0);
+    const many = Array.from({ length: 10 }, (_, i) =>
+      boardEntry("B", "772", "Wallisellen, Furtbach", [10, 2 + i * 2], [["Wallisellen, Bahnhof", [10, 10 + i * 2]]], `b${i}`));
+    connectionsFor(app, { "board:Wallisellen, Furtbach": many, "Wallisellen, Furtbach→Rigi Kulm": () => [walkToS14] });
+    await app.Planner.plan("Rigi Kulm", at(10, 0), "fromHome", "depart");
+    const asks = app.requests.filter((r) => r.path === "connections" && r.params.get("from") === "Wallisellen, Furtbach" && r.params.get("limit") === "3");
+    assert.equal(asks.length, app.BOARD_MAX_REQUERIES);
   });
 });
 
@@ -476,6 +469,10 @@ describe("alternatives", () => {
     const app = loadApp();
     connectionsFor(app, {
       "board:Wallisellen, Furtbach": [boardEntry("B", "772", "Wallisellen, Furtbach", [10, 17], [["Wallisellen, Bahnhof", [10, 26]]])],
+      "Wallisellen, Furtbach→Rigi Kulm": (p) => (p.get("time") === "10:17" ? [conn(
+        ride("B", "772", "Wallisellen, Furtbach", [10, 17], "Wallisellen, Bahnhof", [10, 26], { trip: "772a" }),
+        ride("S", "14", "Wallisellen", [10, 39], "Rigi Kulm", [12, 34], { trip: "s14-39" }),
+      )] : []),
       "Wallisellen→Rigi Kulm": (p) => {
         const list = [[10, 9, 12, 4], [10, 24, 12, 19], [10, 39, 12, 34], [10, 54, 13, 19]]
           .map(([h, m, ah, am]) => conn(ride("S", "14", "Wallisellen", [h, m], "Rigi Kulm", [ah, am], { trip: `s14-${m}` })));
@@ -693,7 +690,7 @@ describe("recently left and more connections", () => {
 
 describe("custom places", () => {
   // Work: two stations, 5 and 12 min from the office.
-  const work = { name: "Büro", custom: true, feeders: [], stops: [
+  const work = { name: "Büro", custom: true, stops: [
     { name: "Zürich Oerlikon", walkMin: 5 },
     { name: "Zürich Seebach", walkMin: 12 },
   ] };
@@ -736,7 +733,7 @@ describe("custom places", () => {
 
   test("planPlaces: two custom places, walks at both ends, Direction other", async () => {
     const app = loadApp();
-    const gym = { name: "Gym", custom: true, feeders: [], stops: [{ name: "Stettbach", walkMin: 7 }] };
+    const gym = { name: "Gym", custom: true, stops: [{ name: "Stettbach", walkMin: 7 }] };
     connectionsFor(app, {
       "Zürich Oerlikon→Stettbach": [conn(ride("S", "9", "Zürich Oerlikon", [18, 10], "Stettbach", [18, 20]))],
     });
@@ -750,7 +747,7 @@ describe("custom places", () => {
 
   test("a station is a place with one stop and no walk", () => {
     const app = loadApp();
-    assert.deepEqual(plain(app.station("Bern")), { name: "Bern", custom: false, stops: [{ name: "Bern", walkMin: 0 }], feeders: [] });
+    assert.deepEqual(plain(app.station("Bern")), { name: "Bern", custom: false, stops: [{ name: "Bern", walkMin: 0 }] });
     assert.equal(app.ZUHAUSE.stops.length, app.HOME_STOPS.length);
   });
 });
@@ -777,8 +774,15 @@ describe("stored places", () => {
     assert.equal(app.Places.resolve("Bern").custom, false);
     app.Places.remove("Arbeit");
     assert.deepEqual(plain(app.Places.names()), ["Zuhause"]);
-    assert.equal(app.Places.resolve("Zuhause").feeders.length, app.FEEDERS.length);
-    assert.throws(() => app.Places.normalize("Zuhause", [{ name: "A", walkMin: 1 }]), /fest/);
+    // Zuhause is seeded, ordinary, and the default Von.
+    assert.equal(app.Places.home().name, "Zuhause");
+    assert.deepEqual(plain(app.Places.resolve("Zuhause").stops), plain(app.HOME_STOPS));
+    app.Places.setHome("Zuhause");
+    app.Places.put(app.Places.normalize("Oma", [{ name: "Bern", walkMin: 3 }], true));
+    assert.equal(app.Places.home().name, "Oma");
+    assert.deepEqual(plain(app.Places.names()), ["Oma", "Zuhause"]);
+    app.Places.remove("Zuhause");
+    assert.deepEqual(plain(app.Places.names()), ["Oma"]);
   });
 
   test("a stored place works as destination of the form", async () => {
@@ -810,8 +814,10 @@ describe("places exchange", () => {
     const b = loadApp();
     b.Places.put({ name: "Büro", stops: [{ name: "Zürich Seebach", walkMin: 12 }] });
     b.Places.put({ name: "Oma", stops: [{ name: "Bern", walkMin: 3 }] });
-    assert.equal(b.Places.importJson(text), 2);
+    assert.equal(b.Places.importJson(text), 3); // Zuhause travels along
     assert.deepEqual(plain(b.Places.names()), ["Zuhause", "Büro", "Gym", "Oma"]);
+    assert.equal(JSON.parse(text).places.find((p) => p.name === "Zuhause").home, true);
+    assert.ok(JSON.parse(text).places.find((p) => p.name === "Zuhause").stops.some((s) => s.secondary));
     assert.equal(b.Places.byName("Büro").stops[0].name, "Zürich Oerlikon");
   });
 
@@ -822,7 +828,7 @@ describe("places exchange", () => {
     assert.ok(link.startsWith("https://x.test/app/#places="));
     const hash = link.slice(link.indexOf("#"));
     const b = loadApp();
-    assert.equal(b.Places.importJson(b.Places.fromHash(hash)), 2);
+    assert.equal(b.Places.importJson(b.Places.fromHash(hash)), 3);
     assert.equal(b.Places.fromHash(""), null);
     assert.equal(b.Places.fromHash("#other=1"), null);
   });
