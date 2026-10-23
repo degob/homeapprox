@@ -102,13 +102,15 @@ li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
 /* Summary card: grid, one row per measure.
    icon | range (fills) | ✂ slot | ↺ slot  — slots fixed so rows align. */
 #summary {
-  display: grid; grid-template-columns: auto 1fr 1.6rem 1.6rem; gap: .35rem .6rem;
+  display: grid; grid-template-columns: auto minmax(0, 1fr) 1.6rem 1.6rem; gap: .35rem .6rem;
   align-items: center; margin: .75rem 0; padding: .5rem .75rem;
   background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
   color: var(--muted);
 }
 #summary .icon { color: var(--transit); font-weight: 700; width: 1.2rem; text-align: center; }
-#summary .range { display: flex; align-items: center; gap: .4rem; white-space: nowrap; }
+/* Range may wrap (narrow phones) instead of pushing the buttons out. */
+#summary .range { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .4rem; min-width: 0; }
+#summary .range .dur, #summary .range .jump { white-space: nowrap; }
 #summary .slot { display: flex; justify-content: center; }
 #summary .jump { cursor: pointer; }
 #summary .jump:hover { outline: 2px solid var(--transit); outline-offset: 1px; border-radius: 4px; }
@@ -155,6 +157,9 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
 .places .exchange { margin-top: .6rem; }
 .places #px-status:empty { display: none; }
 .ends { flex-wrap: nowrap; }
+.cal { padding: .45rem .6rem; font-weight: 400; white-space: nowrap; }
+.go { padding: .45rem .8rem; font-size: 1.1rem; line-height: 1.3; }
+.cal.other { color: var(--ink); border-color: var(--transit); }
 .swap { padding: .45rem .7rem; font-size: 1.1rem; }
 .dests { display: flex; flex-wrap: wrap; gap: .3rem; width: 100%; }
 .dests:empty { display: none; }
@@ -209,7 +214,11 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
 .legs .tm.end { text-align: right; }
 .legs .delay { color: var(--bad); font-size: .75rem; }
 .legs .stop { overflow-wrap: anywhere; }
-.legs .gl { display: block; color: var(--muted); font-size: .75rem; }
+.legs .gl {
+  display: inline-block; margin-top: .15rem; padding: 0 .3rem; min-width: 1.3rem; text-align: center;
+  font-size: .72rem; font-weight: 700; line-height: 1.3; color: var(--muted);
+  border: 1px solid var(--muted); border-radius: 3px;
+}
 .legs .ln { white-space: nowrap; width: 2.6rem; }
 .legs .ln b {
   display: inline-block; min-width: 2.2rem; text-align: center; border-radius: 4px;
@@ -277,6 +286,12 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
 /* Place field with suggestion dropdown. */
 .place { position: relative; flex: 1 1 14rem; }
 .place input { width: 100%; }
+/* Field holds a known place: ⌂ drawn inside, text shifted right. */
+.place.known::before {
+  content: "⌂"; position: absolute; left: .6rem; top: .45rem; line-height: 1.5;
+  color: var(--walk); font-weight: 700; pointer-events: none;
+}
+.place.known input { padding-left: 1.7rem; }
 .sugg {
   position: absolute; left: 0; right: 0; top: 100%; z-index: 2;
   margin: .2rem 0 0; padding: .25rem 0; list-style: none;
@@ -355,7 +370,8 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
              autocomplete="off" role="combobox" aria-expanded="false" aria-controls="sugg">
       <ul id="sugg" class="sugg" role="listbox"></ul>
     </div>
-    <!-- Picked destinations; the field then takes the next one. -->
+    <button type="button" id="add-dest" class="ghost swap" aria-label="Weiteres Ziel" title="Weiteres Ziel">+</button>
+    <!-- Parked destinations; the field holds the current one. -->
     <div id="dests" class="dests"></div>
   </div>
 
@@ -364,9 +380,11 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
       <input type="radio" name="ref" id="r-dep" value="depart" checked><label for="r-dep">Ab</label>
       <input type="radio" name="ref" id="r-arr" value="arrive"><label for="r-arr">An</label>
     </div>
-    <input type="date" id="date" required>
+    <!-- Date is almost always today: a 📅 button, the input appears on demand. -->
+    <button type="button" id="pick-date" class="ghost cal" aria-label="Datum wählen">📅</button>
+    <input type="date" id="date" required hidden>
     <input type="time" id="time" required>
-    <button type="submit">Suchen</button>
+    <button type="submit" class="go" aria-label="Suchen" title="Suchen">🚆</button>
   </div>
 
 </form>
@@ -556,6 +574,7 @@ const TransportApi = (() => {
       depDelayMin: dep.delayMin,
       platform: s.departure.platform || "",
       to: s.arrival.station.name,
+      arrPlatform: s.arrival.platform || "",
       arr: arr.at,
       arrDelayMin: arr.delayMin,
       walkSec,
@@ -659,6 +678,7 @@ const TransportApi = (() => {
           depDelayMin: liveTime(e.stop, "departure").delayMin,
           platform: e.stop.platform || "",
           to: target,
+          arrPlatform: stopAt.platform || "",
           arr: liveTime(stopAt, "arrival").at,
           arrDelayMin: liveTime(stopAt, "arrival").delayMin,
           walkSec: 0,
@@ -1398,10 +1418,47 @@ const $ = (id) => document.getElementById(id);
 const hhmm = (d) => d.toLocaleTimeString("de-CH", { hour: "2-digit", minute: "2-digit", hour12: false });
 const minutes = (a, b) => Math.round((b - a) / MS_PER_MIN);
 
+const localDateValue = (d) => new Date(d.getTime() - d.getTimezoneOffset() * MS_PER_MIN).toISOString().slice(0, 10);
+
 function initInputs() {
   const now = new Date();
-  $("date").valueAsDate = new Date(now.getTime() - now.getTimezoneOffset() * MS_PER_MIN);
+  $("date").value = localDateValue(now);
   $("time").value = hhmm(now);
+  showDate();
+}
+
+// 📅 alone means today; another day shows as "📅 Fr 24.10." on the button.
+function showDate() {
+  const btn = $("pick-date");
+  const v = $("date").value;
+  const today = v === localDateValue(new Date());
+  btn.classList.toggle("other", !today);
+  if (today) {
+    btn.textContent = "📅";
+    return;
+  }
+  const d = new Date(`${v}T00:00`);
+  btn.textContent = `📅 ${d.toLocaleDateString("de-CH", { weekday: "short", day: "2-digit", month: "2-digit" })}`;
+}
+
+// Reveal the input and open the picker; hide it again once a day is chosen.
+function onPickDate() {
+  const input = $("date");
+  input.hidden = false;
+  if (typeof input.showPicker === "function") {
+    try {
+      input.showPicker();
+    } catch {
+      input.focus();
+    }
+  } else {
+    input.focus();
+  }
+}
+
+function onDateChange() {
+  $("date").hidden = true;
+  showDate();
 }
 
 // Duration color: share of --bad on the scale best → worst duration.
@@ -1683,12 +1740,12 @@ function legRow(l) {
   tr.className = l.kind;
   const ride = l.kind === LegKind.RIDE;
 
+  // Platform signs under both stops: departure and arrival.
   const from = cell("stop", l.from);
-  if (ride && l.platform) {
-    const gl = document.createElement("span");
-    gl.className = "gl";
-    gl.textContent = `Gleis/Kante ${l.platform}`;
-    from.append(gl);
+  const to = cell("stop", l.to);
+  if (ride) {
+    l.platform && from.append(platformSign(l.platform));
+    l.arrPlatform && to.append(platformSign(l.arrPlatform));
   }
 
   const ln = document.createElement("td");
@@ -1706,8 +1763,18 @@ function legRow(l) {
     });
   }
 
-  tr.append(timeCell("tm", l.dep, l.depDelayMin), from, ln, dir, cell("stop", l.to), timeCell("tm end", l.arr, l.arrDelayMin));
+  tr.append(timeCell("tm", l.dep, l.depDelayMin), from, ln, dir, to, timeCell("tm end", l.arr, l.arrDelayMin));
   return tr;
+}
+
+// Platform as a small sign: the number in a box, like on the station.
+function platformSign(platform) {
+  const s = document.createElement("span");
+  s.className = "gl";
+  s.textContent = platform;
+  s.title = `Gleis/Kante ${platform}`;
+  s.setAttribute("aria-label", `Gleis/Kante ${platform}`);
+  return s;
 }
 
 // Time with the delay against schedule when there is one: "18:02 +9".
@@ -1859,7 +1926,7 @@ function renderAlternatives(panel, j, x, alts) {
 // ---------- Place suggestions (one widget per field: Ort/Nach, Von) ----------
 
 // `onPick(name)`: what a chosen suggestion does; default fills the field.
-function placeField(inputId, listId, onPick = (name) => { $(inputId).value = name; }) {
+function placeField(inputId, listId, onPick = (name) => { $(inputId).value = name; markPlaces(); }) {
   const input = () => $(inputId);
   const list = () => $(listId);
   let timer = null;
@@ -1913,9 +1980,11 @@ function placeField(inputId, listId, onPick = (name) => { $(inputId).value = nam
     const l = list();
     l.replaceChildren();
     if (grouped) {
+      // A name that became a place is listed under Orte only.
       const places = Places.names();
-      const favs = Stations.favorites();
-      const recent = Stations.recent();
+      const notPlace = (n) => !Places.byName(n);
+      const favs = Stations.favorites().filter(notPlace);
+      const recent = Stations.recent().filter(notPlace);
       if (places.length) {
         l.append(group("Orte"), ...places.map(item));
       }
@@ -1941,7 +2010,7 @@ function placeField(inputId, listId, onPick = (name) => { $(inputId).value = nam
       return;
     }
     timer = setTimeout(async () => {
-      const known = [...Places.names(), ...Stations.favorites(), ...Stations.recent()];
+      const known = [...new Set([...Places.names(), ...Stations.favorites(), ...Stations.recent()])];
       try {
         const names = await Planner.suggest(query, known);
         if (s === seq) {
@@ -1970,9 +2039,9 @@ function placeField(inputId, listId, onPick = (name) => { $(inputId).value = nam
   return { init, close };
 }
 
-// Destination chips under the place field. A picked suggestion becomes a
-// chip and clears the field; typed text left in the field counts too.
-//   [Zürich HB ×] [Stettbach ×]   ┌ Ort … ┐
+// Destinations: the field holds one; "+" moves it to a chip so another
+// can be typed. Chips plus the field's text are the destinations.
+//   [Zürich HB ×] [Stettbach ×]   ┌ Nach … ┐ [+]
 const Destinations = (() => {
   let names = [];
 
@@ -1993,14 +2062,18 @@ const Destinations = (() => {
       box.append(chip);
     });
     $("place").required = names.length === 0;
+    markPlaces();
   }
 
-  function add(name) {
-    if (name && !names.includes(name)) {
-      names = [...names, name];
+  // "+": field text becomes a chip, field is free for the next one.
+  function park() {
+    const typed = $("place").value.trim();
+    if (typed && !names.includes(typed)) {
+      names = [...names, typed];
     }
     $("place").value = "";
     render();
+    $("place").focus();
   }
 
   function remove(name) {
@@ -2008,8 +2081,12 @@ const Destinations = (() => {
     render();
   }
 
+  // Last one in the field, the rest as chips: a single destination is
+  // plain text, not a chip.
   function set(list) {
-    names = [...new Set(list.filter(Boolean))];
+    const uniq = [...new Set(list.filter(Boolean))];
+    names = uniq.slice(0, -1);
+    $("place").value = uniq[uniq.length - 1] || "";
     render();
   }
 
@@ -2019,7 +2096,7 @@ const Destinations = (() => {
     return typed && !names.includes(typed) ? [...names, typed] : names;
   }
 
-  return { add, set, all, render };
+  return { park, set, all, render };
 })();
 
 // ---------- Places editor: list, add, edit, delete ----------
@@ -2205,7 +2282,7 @@ const PlacesEditor = (() => {
   return { init };
 })();
 
-const placeFields = [placeField("place", "sugg", Destinations.add), placeField("origin", "origin-sugg")];
+const placeFields = [placeField("place", "sugg"), placeField("origin", "origin-sugg")];
 const closeSuggestions = () => placeFields.forEach((f) => f.close());
 
 function durationScale(journeys) {
@@ -2814,12 +2891,21 @@ async function onSubmit(e) {
   }
 }
 
+// ⌂ inside Von/Nach when the text is a known place.
+function markPlaces() {
+  ["origin", "place"].forEach((id) => {
+    const input = $(id);
+    input.closest?.(".place")?.classList.toggle("known", Boolean(Places.byName(input.value.trim())));
+  });
+}
+
 // ⇅: Von ↔ first Nach. Further destinations are dropped (one Von only).
 function onSwap() {
   const dests = Destinations.all();
   const origin = $("origin").value.trim();
   $("origin").value = dests[0] || "";
   Destinations.set(origin ? [origin] : []);
+  markPlaces();
 }
 
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -2829,6 +2915,7 @@ function startSearch({ from, to, at, timeRef }) {
   document.querySelector(`input[name=ref][value="${timeRef}"]`).checked = true;
   $("origin").value = from;
   Destinations.set([to]);
+  markPlaces();
   $("date").value = `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}`;
   $("time").value = hhmm(at);
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2863,6 +2950,12 @@ $("later").addEventListener("click", () => onMore("later"));
 placeFields.forEach((f) => f.init());
 PlacesEditor.init();
 $("swap").addEventListener("click", onSwap);
+$("add-dest").addEventListener("click", Destinations.park);
+["origin", "place"].forEach((id) => $(id).addEventListener("input", markPlaces));
+markPlaces();
+$("pick-date").addEventListener("click", onPickDate);
+$("date").addEventListener("change", onDateChange);
+$("date").addEventListener("blur", () => { $("date").hidden = true; });
 $("form").addEventListener("submit", onSubmit);
 walkBox.addEventListener("change", render);
 let resizeTimer = null;

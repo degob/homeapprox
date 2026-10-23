@@ -815,3 +815,59 @@ Weiter → Schritt 4.
 - Planner: `searchPairs(pairs, at, timeRef)` / `planPairs`; `params.pairs` für Frühere/Spätere, `prunePairs()` prunt pro Paar mit dessen eigenen Enden. `plan(…, dir, …)`/`search(…)` bleiben als Richtungs-Form (Tests).
 - `followUpSearch` → `{ from: Umsteigeort, to: Zielort(-Name) }`; «Neue Suche» füllt die beiden Felder.
 - 68/68 Tests.
+
+## User
+
+Orte nicht auch unter «Zuletzt» zeigen (doppelt).
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Favoriten und Zuletzt ohne Namen, die ein Ort sind; Vorschlagsliste ohne Doppelte.
+
+## User
+
+Datum ist fast immer heute: kleiner oder nur Kalender-Symbol, Klick nur für anderen Tag.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* 📅-Button statt Datumsfeld. Klick zeigt das Feld und öffnet den Picker (`showPicker()`, sonst Fokus); nach Wahl oder Blur wieder versteckt. Anderer Tag als heute: Button zeigt «📅 Fr 24.10.» und ist hervorgehoben. Wert bleibt im versteckten `#date` für die Suche.
+
+## User
+
+«Suchen» zu breit; Bus/Zug/Tram-Icon stattdessen.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Submit-Button zeigt 🚆 (`aria-label`/`title` «Suchen»), schmaler.
+
+## User
+
+Ein einzelnes Ziel im Feld lassen, nicht als Chip. «+»-Button parkt es als Chip und macht das Feld frei.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Vorschlag füllt das Feld. «+» neben dem Feld: `Destinations.park()` → Chip, Feld leer, Fokus. Ziele = Chips + Feldtext. `set(list)` legt das letzte ins Feld, den Rest als Chips.
+
+## User
+
+⌂ in den Von/Nach-Feldern, wenn der Text ein bekannter Ort ist.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* `markPlaces()` setzt `.place.known` auf dem Feld-Wrapper; CSS zeichnet ⌂ links im Feld (grün), Text rückt ein. Aufgerufen bei Eingabe, Vorschlagswahl, Chips, ⇅, «Neue Suche».
+
+## User
+
+Layoutproblem: ↺ ragt rechts aus der Filterkarte (Handy).
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Grid-Spalte `minmax(0, 1fr)` und `.range` darf umbrechen (`min-width: 0`), Pillen/Zahlen bleiben einzeilig. Vorher drückte `nowrap` die Button-Spalten hinaus.
+
+## User
+
+Ankunftsgleis an Zwischenhalten zeigen; «Gleis/Kante» durch Symbol ersetzen.
+
+## Claude
+
+*(Aktualisiert `index.html`.)* Abschnitt hat `arrPlatform` (`s.arrival.platform`, bei Zubringern `passList`-Halt). Detailtabelle: Gleisnummer als kleines Schild (Zahl im Rahmen) unter Abfahrts- und Ankunftshalt, Tooltip «Gleis/Kante N».
