@@ -154,6 +154,8 @@ button.ghost, label.ghost { background: var(--surface); color: var(--transit); b
 label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; cursor: pointer; }
 .places .exchange { margin-top: .6rem; }
 .places #px-status:empty { display: none; }
+.ends { flex-wrap: nowrap; }
+.swap { padding: .45rem .7rem; font-size: 1.1rem; }
 .dests { display: flex; flex-wrap: wrap; gap: .3rem; width: 100%; }
 .dests:empty { display: none; }
 .dest {
@@ -337,26 +339,19 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
 </section>
 
 <form id="form">
-  <div class="row">
-    <div class="seg" role="radiogroup" aria-label="Richtung">
-      <input type="radio" name="dir" id="d-to" value="toHome" checked><label for="d-to">Nach Hause</label>
-      <input type="radio" name="dir" id="d-from" value="fromHome"><label for="d-from">Von zu Hause</label>
-      <input type="radio" name="dir" id="d-other" value="other"><label for="d-other">Anderer Ort</label>
-    </div>
-  </div>
-
-  <!-- "Von" only for Anderer Ort; "place" is the one place (home modes) or "Nach". -->
-  <div class="row" id="origin-row" hidden>
+  <!-- Von: one place (Zuhause by default). Nach: one or more, as chips. -->
+  <div class="row ends">
     <div class="place">
-      <input type="text" id="origin" placeholder="Von, z. B. Zürich HB"
+      <input type="text" id="origin" placeholder="Von, z. B. Zuhause" value="Zuhause" required
              autocomplete="off" role="combobox" aria-expanded="false" aria-controls="origin-sugg">
       <ul id="origin-sugg" class="sugg" role="listbox"></ul>
     </div>
+    <button type="button" id="swap" class="ghost swap" aria-label="Von und Nach tauschen" title="Tauschen">⇅</button>
   </div>
 
   <div class="row">
     <div class="place">
-      <input type="text" id="place" placeholder="Ort, z. B. Zürich HB" required
+      <input type="text" id="place" placeholder="Nach, z. B. Zürich HB" required
              autocomplete="off" role="combobox" aria-expanded="false" aria-controls="sugg">
       <ul id="sugg" class="sugg" role="listbox"></ul>
     </div>
@@ -992,43 +987,56 @@ const Planner = (() => {
     ? { lo: at, hi: shift(at, MIN_WINDOW_MIN) }
     : { lo: shift(at, -MIN_WINDOW_MIN), hi: at };
 
-  // Which sides are custom for a form direction; enough for pruning merged
-  // results where the far places are several.
-  function customSides(dir) {
-    const none = station("");
-    if (dir === Direction.TO_HOME) {
-      return [none, ZUHAUSE];
-    }
-    return dir === Direction.FROM_HOME ? [ZUHAUSE, none] : [none, none];
-  }
-
-  // Form entry: direction + place(s) → (from, to) place pairs. `origin`
-  // only for Direction.OTHER. Several places: planned each, merged, ordered
-  // by departure; failures labelled with the place when there are several.
+  // Direction + place(s) → [from, to] pairs. `origin` only for OTHER.
   //   toHome:   place → Zuhause     fromHome: Zuhause → place
   //   other:    origin → place
-  async function plan(placeOrPlaces, at, dir, timeRef, origin) {
-    const places = [].concat(placeOrPlaces).map(asPlace);
-    const pair = (p) => {
+  function pairsFor(placeOrPlaces, dir, origin) {
+    return [].concat(placeOrPlaces).map(asPlace).map((p) => {
       if (dir === Direction.TO_HOME) {
         return [p, ZUHAUSE];
       }
       return dir === Direction.FROM_HOME ? [ZUHAUSE, p] : [asPlace(origin), p];
-    };
-    const settled = await Promise.allSettled(places.map((p) => planPlaces(...pair(p), at, timeRef)));
+    });
+  }
+
+  const pairLabel = ([from, to]) => `${from.name} → ${to.name}`;
+
+  // Several (from, to) pairs: planned each, merged, ordered by departure;
+  // failures labelled with the pair when there are several.
+  async function planPairs(pairs, at, timeRef) {
+    const settled = await Promise.allSettled(pairs.map(([f, t]) => planPlaces(f, t, at, timeRef)));
     const failed = [];
     let journeys = [];
     settled.forEach((r, i) => {
       if (r.status === "rejected") {
-        failed.push(places[i].name);
+        failed.push(pairLabel(pairs[i]));
         return;
       }
-      const tag = places.length > 1 ? `${places[i].name}: ` : "";
+      const tag = pairs.length > 1 ? `${pairLabel(pairs[i])}: ` : "";
       failed.push(...r.value.failed.map((f) => tag + f));
       journeys = journeys.concat(r.value.journeys);
     });
     journeys.sort((a, b) => a.start - b.start);
     return { journeys, failed, at, timeRef, ...defaultRange(at, timeRef) };
+  }
+
+  // Direction form of planPairs (tests, follow-up searches).
+  const plan = (placeOrPlaces, at, dir, timeRef, origin) => planPairs(pairsFor(placeOrPlaces, dir, origin), at, timeRef);
+
+  // Pruning of merged results: per pair, each with its own custom sides.
+  function prunePairs(journeys, pairs) {
+    const byPair = new Map(pairs.map((p) => [pairLabel(p), p]));
+    const groups = new Map();
+    journeys.forEach((j) => {
+      const k = `${j.fromPlace} → ${j.toPlace}`;
+      groups.set(k, [...(groups.get(k) || []), j]);
+    });
+    let out = [];
+    groups.forEach((g, k) => {
+      const [from, to] = byPair.get(k) || [station(""), station("")];
+      out = out.concat(prune(g, from, to));
+    });
+    return out.sort((a, b) => a.start - b.start);
   }
 
   // Core: every stop pair of the two places plus the feeders of each custom
@@ -1208,31 +1216,31 @@ const Planner = (() => {
     });
   }
 
-  // New search from a transfer stop, from my planned arrival there on.
-  //   toHome:           Nach Hause from the stop
-  //   fromHome / other: Anderer Ort, stop → the journey's destination
+  // New search from a transfer stop to the journey's destination place,
+  // from my planned arrival there on.
+  //   Bern → Zuhause, change at Zürich HB  ⇒  Zürich HB → Zuhause, ab 08:58
   function followUpSearch(j, x) {
-    if (j.dir === Direction.TO_HOME) {
-      return { dir: Direction.TO_HOME, place: x.stop, origin: "", at: x.from, timeRef: TimeRef.DEPART };
-    }
-    return { dir: Direction.OTHER, origin: x.stop, place: j.query.to, at: x.from, timeRef: TimeRef.DEPART };
+    return { from: x.stop, to: j.toPlace, at: x.from, timeRef: TimeRef.DEPART };
   }
 
   // Entry point of the form. Ab also fetches what left up to
   // RECENT_PAST_MIN ago; `at` stays the asked time (for the "vor N Min." tag).
-  async function search(places, at, dir, timeRef, origin) {
+  async function searchPairs(pairs, at, timeRef) {
     const lookback = timeRef === TimeRef.DEPART ? RECENT_PAST_MIN : 0;
-    const r = await plan(places, shift(at, -lookback), dir, timeRef, origin);
+    const r = await planPairs(pairs, shift(at, -lookback), timeRef);
     const hi = timeRef === TimeRef.DEPART ? shift(at, MIN_WINDOW_MIN) : r.hi;
-    return { ...r, at, hi, params: { places, dir, timeRef, origin } };
+    return { ...r, at, hi, params: { pairs, timeRef } };
   }
+
+  // Direction form of searchPairs (tests).
+  const search = (places, at, dir, timeRef, origin) => searchPairs(pairsFor(places, dir, origin), at, timeRef);
 
   // "Frühere" / "Spätere": fetch the next MORE_STEP_MIN outside the window,
   // merge, widen the window.
   //   Ab: earlier = depart from lo − step; later = depart from hi
   //   An: earlier = arrive by lo;          later = arrive by hi + step
   async function extend(result, side) {
-    const { places, dir, timeRef, origin } = result.params;
+    const { pairs, timeRef } = result.params;
     const earlier = side === "earlier";
     const depart = timeRef === TimeRef.DEPART;
     const lo = earlier ? shift(result.lo, -MORE_STEP_MIN) : result.lo;
@@ -1243,17 +1251,17 @@ const Planner = (() => {
     } else {
       q = earlier ? result.lo : hi;
     }
-    const more = await plan(places, q, dir, timeRef, origin);
+    const more = await planPairs(pairs, q, timeRef);
     return {
       ...result,
-      journeys: prune([...result.journeys, ...more.journeys], ...customSides(dir)),
+      journeys: prunePairs([...result.journeys, ...more.journeys], pairs),
       failed: [...new Set([...result.failed, ...more.failed])],
       lo,
       hi,
     };
   }
 
-  return { plan, planPlaces, search, extend, visible, suggest, stopAbbr, shortName, alternatives, followUpSearch };
+  return { plan, planPlaces, planPairs, search, searchPairs, extend, visible, suggest, stopAbbr, shortName, alternatives, followUpSearch };
 })();
 
 // ---------- Stations: recent + favorites, persisted in localStorage ----------
@@ -1317,9 +1325,11 @@ const Places = (() => {
   // Stored shape is the data only; `custom` and `feeders` are added on read.
   const toPlace = (p) => ({ name: p.name, custom: true, feeders: [], stops: p.stops });
 
-  const all = () => load().map(toPlace);
-  const names = () => load().map((p) => p.name);
+  // Zuhause is always first and fixed (code, with feeders); the rest stored.
+  const all = () => [ZUHAUSE, ...load().map(toPlace)];
+  const names = () => all().map((p) => p.name);
   const byName = (name) => all().find((p) => p.name === name) || null;
+  const isFixed = (name) => name === ZUHAUSE.name;
 
   // A name typed or picked in a place field: custom place if one matches,
   // else a plain station.
@@ -1330,6 +1340,9 @@ const Places = (() => {
     const n = name.trim();
     if (!n) {
       throw new Error("Name fehlt.");
+    }
+    if (isFixed(n)) {
+      throw new Error(`${n} ist fest.`);
     }
     const clean = stops
       .map((s) => ({ name: s.name.trim(), walkMin: Math.max(0, Math.round(Number(s.walkMin) || 0)) }))
@@ -1376,7 +1389,7 @@ const Places = (() => {
     return m ? decodeURIComponent(m[1]) : null;
   }
 
-  return { all, names, byName, resolve, normalize, put, remove, exportJson, importJson, toLink, fromHash };
+  return { all, names, byName, isFixed, resolve, normalize, put, remove, exportJson, importJson, toLink, fromHash };
 })();
 
 // ---------- UI ----------
@@ -2088,9 +2101,13 @@ const PlacesEditor = (() => {
       const stops = document.createElement("span");
       stops.className = "pstops";
       stops.textContent = p.stops.map((s) => `${s.name} ${s.walkMin}'`).join(" · ");
-      const edit = iconButton("✎", "Bearbeiten", () => showForm(p));
-      const del = iconButton("×", "Löschen", () => { Places.remove(p.name); renderList(); showForm(null); });
-      li.append(name, stops, edit, del);
+      li.append(name, stops);
+      if (!Places.isFixed(p.name)) {
+        li.append(
+          iconButton("✎", "Bearbeiten", () => showForm(p)),
+          iconButton("×", "Löschen", () => { Places.remove(p.name); renderList(); showForm(null); })
+        );
+      }
       ul.append(li);
     });
   }
@@ -2766,17 +2783,14 @@ async function onSubmit(e) {
 
   const places = Destinations.all();
   const origin = $("origin").value.trim();
-  const dir = document.querySelector("input[name=dir]:checked").value;
-  if (!places.length || (dir === Direction.OTHER && !origin)) {
+  if (!places.length || !origin) {
     return;
   }
 
   closeSuggestions();
   Destinations.set(places);
-  if (dir === Direction.OTHER) {
-    Stations.touch(origin);
-  }
-  places.forEach(Stations.touch);
+  // Recent list: stations only; custom places are listed anyway.
+  [origin, ...places].filter((n) => !Places.byName(n)).forEach(Stations.touch);
 
   const at = new Date(`${$("date").value}T${$("time").value}`);
   const timeRef = document.querySelector("input[name=ref]:checked").value;
@@ -2789,7 +2803,9 @@ async function onSubmit(e) {
   render();
 
   try {
-    lastResult = await Planner.search(places.map(Places.resolve), at, dir, timeRef, Places.resolve(origin));
+    const from = Places.resolve(origin);
+    const pairs = places.map((p) => [from, Places.resolve(p)]);
+    lastResult = await Planner.searchPairs(pairs, at, timeRef);
     Timeline.reset();
     render();
   } catch (err) {
@@ -2798,23 +2814,21 @@ async function onSubmit(e) {
   }
 }
 
-// Anderer Ort shows the "Von" field and turns "Ort" into "Nach".
-function onDirChange() {
-  const other = document.querySelector("input[name=dir]:checked").value === Direction.OTHER;
-  $("origin-row").hidden = !other;
-  $("origin").required = other;
-  $("place").placeholder = other ? "Nach, z. B. Zürich Flughafen" : "Ort, z. B. Zürich HB";
+// ⇅: Von ↔ first Nach. Further destinations are dropped (one Von only).
+function onSwap() {
+  const dests = Destinations.all();
+  const origin = $("origin").value.trim();
+  $("origin").value = dests[0] || "";
+  Destinations.set(origin ? [origin] : []);
 }
 
 const pad2 = (n) => String(n).padStart(2, "0");
 
 // Fills the form from search parameters and runs it, e.g. "Neue Suche ab …".
-function startSearch({ dir, origin, place, at, timeRef }) {
-  document.querySelector(`input[name=dir][value="${dir}"]`).checked = true;
+function startSearch({ from, to, at, timeRef }) {
   document.querySelector(`input[name=ref][value="${timeRef}"]`).checked = true;
-  onDirChange();
-  $("origin").value = origin || "";
-  Destinations.set([place]);
+  $("origin").value = from;
+  Destinations.set([to]);
   $("date").value = `${at.getFullYear()}-${pad2(at.getMonth() + 1)}-${pad2(at.getDate())}`;
   $("time").value = hhmm(at);
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -2848,7 +2862,7 @@ $("earlier").addEventListener("click", () => onMore("earlier"));
 $("later").addEventListener("click", () => onMore("later"));
 placeFields.forEach((f) => f.init());
 PlacesEditor.init();
-document.querySelectorAll("input[name=dir]").forEach((r) => r.addEventListener("change", onDirChange));
+$("swap").addEventListener("click", onSwap);
 $("form").addEventListener("submit", onSubmit);
 walkBox.addEventListener("change", render);
 let resizeTimer = null;

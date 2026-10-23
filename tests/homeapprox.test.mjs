@@ -609,7 +609,7 @@ describe("Anderer Ort", () => {
 });
 
 describe("Neue Suche ab Umsteigeort", () => {
-  test("to home: Nach Hause from the transfer stop, from my arrival there", async () => {
+  test("to home: from the transfer stop to Zuhause, from my arrival there", async () => {
     const app = loadApp();
     connectionsFor(app, {
       "Bern→Wallisellen": [conn(ride("IC", "8", "Bern", [8, 2], "Zürich HB", [8, 58]), ride("S", "8", "Zürich HB", [9, 7], "Wallisellen", [9, 16]))],
@@ -617,10 +617,10 @@ describe("Neue Suche ab Umsteigeort", () => {
     const { journeys } = await app.Planner.plan("Bern", at(8, 0), "toHome", "depart");
     const j = journeys[0];
     const s = plain(app.Planner.followUpSearch(j, j.transfers[0]));
-    assert.deepEqual({ ...s, at: hm(new Date(s.at)) }, { dir: "toHome", place: "Zürich HB", origin: "", at: "08:58", timeRef: "depart" });
+    assert.deepEqual({ ...s, at: hm(new Date(s.at)) }, { from: "Zürich HB", to: "Zuhause", at: "08:58", timeRef: "depart" });
   });
 
-  test("from home: Anderer Ort from the transfer stop to the original place", async () => {
+  test("from home: from the transfer stop to the original place", async () => {
     const app = loadApp();
     connectionsFor(app, {
       "Wallisellen→Bern": [conn(ride("S", "8", "Wallisellen", [8, 20], "Zürich HB", [8, 30]), ride("IC", "8", "Zürich HB", [8, 32], "Bern", [9, 28]))],
@@ -628,7 +628,7 @@ describe("Neue Suche ab Umsteigeort", () => {
     const { journeys } = await app.Planner.plan("Bern", at(8, 0), "fromHome", "depart");
     const j = journeys[0];
     const s = plain(app.Planner.followUpSearch(j, j.transfers[0]));
-    assert.deepEqual({ ...s, at: hm(new Date(s.at)) }, { dir: "other", origin: "Zürich HB", place: "Bern", at: "08:30", timeRef: "depart" });
+    assert.deepEqual({ ...s, at: hm(new Date(s.at)) }, { from: "Zürich HB", to: "Bern", at: "08:30", timeRef: "depart" });
   });
 });
 
@@ -770,13 +770,15 @@ describe("stored places", () => {
     const app = loadApp();
     app.Places.put({ name: "Büro", stops: [{ name: "Zürich Oerlikon", walkMin: 5 }] });
     app.Places.put({ name: "Arbeit", stops: [{ name: "Zürich Oerlikon", walkMin: 6 }] }, "Büro");
-    assert.deepEqual(plain(app.Places.names()), ["Arbeit"]);
+    assert.deepEqual(plain(app.Places.names()), ["Zuhause", "Arbeit"]);
     const r = app.Places.resolve("Arbeit");
     assert.equal(r.custom, true);
     assert.equal(r.stops[0].walkMin, 6);
     assert.equal(app.Places.resolve("Bern").custom, false);
     app.Places.remove("Arbeit");
-    assert.deepEqual(plain(app.Places.names()), []);
+    assert.deepEqual(plain(app.Places.names()), ["Zuhause"]);
+    assert.equal(app.Places.resolve("Zuhause").feeders.length, app.FEEDERS.length);
+    assert.throws(() => app.Places.normalize("Zuhause", [{ name: "A", walkMin: 1 }]), /fest/);
   });
 
   test("a stored place works as destination of the form", async () => {
@@ -809,7 +811,7 @@ describe("places exchange", () => {
     b.Places.put({ name: "Büro", stops: [{ name: "Zürich Seebach", walkMin: 12 }] });
     b.Places.put({ name: "Oma", stops: [{ name: "Bern", walkMin: 3 }] });
     assert.equal(b.Places.importJson(text), 2);
-    assert.deepEqual(plain(b.Places.names()), ["Büro", "Gym", "Oma"]);
+    assert.deepEqual(plain(b.Places.names()), ["Zuhause", "Büro", "Gym", "Oma"]);
     assert.equal(b.Places.byName("Büro").stops[0].name, "Zürich Oerlikon");
   });
 

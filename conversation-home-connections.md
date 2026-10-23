@@ -801,3 +801,17 @@ Weiter → Schritt 3.
 - Einstellungs-Karte: «Exportieren» (Download `homeapprox-orte.json`), «Link kopieren» (`…#places=<URL-encoded JSON>`, Zwischenablage, sonst Prompt), «Importieren» (Datei). Statuszeile.
 - Link öffnen: beim Laden `#places=` erkannt → Import, Karte auf, Fragment entfernt. Der Link erreicht keinen Server; bei vielen Orten wird er lang.
 - 68/68 Tests, 3 neu.
+
+## User
+
+Weiter → Schritt 4.
+
+## Claude
+
+*(Aktualisiert `index.html`, Tests.)* Schritt 4: zwei Ortsfelder statt Richtung.
+
+- Formular: «Von» (Standard Zuhause, ein Ort) ⇅ «Nach» (ein oder mehrere, Chips). Richtungs-Buttons weg. ⇅ tauscht Von mit dem ersten Nach.
+- Zuhause ist ein fester Eintrag in `Places` (zuerst, nicht editierbar, mit Zubringern); erscheint in den Vorschlägen unter «Orte».
+- Planner: `searchPairs(pairs, at, timeRef)` / `planPairs`; `params.pairs` für Frühere/Spätere, `prunePairs()` prunt pro Paar mit dessen eigenen Enden. `plan(…, dir, …)`/`search(…)` bleiben als Richtungs-Form (Tests).
+- `followUpSearch` → `{ from: Umsteigeort, to: Zielort(-Name) }`; «Neue Suche» füllt die beiden Felder.
+- 68/68 Tests.
