@@ -530,17 +530,53 @@ describe("alternatives", () => {
 // ---------- Place field: suggestions, recent, favorites ----------
 
 describe("place suggestions", () => {
-  test("under 3 chars: only local (favorites/recent), no API call", async () => {
+  test("1 char: only local (favorites/recent), no API call", async () => {
     const app = loadApp();
-    const names = await app.Planner.suggest("Zü", ["Zürich HB", "Bern"]);
+    const names = await app.Planner.suggest("Z", ["Zürich HB", "Bern"]);
     assert.deepEqual([...names], ["Zürich HB"]);
     assert.equal(app.requests.length, 0);
+  });
+
+  test("local match ignores umlauts: zurich, Zuerich → Zürich HB", async () => {
+    const app = loadApp();
+    for (const q of ["zurich", "Zuerich", "hb"]) {
+      const names = await app.Planner.suggest(q, ["Zürich HB", "Bern"]);
+      assert.equal(names[0], "Zürich HB", q);
+    }
+  });
+
+  test("2 chars (HB) asks the API", async () => {
+    const app = loadApp();
+    app.setRoute((path, params) => path === "locations" && params.get("query") === "HB"
+      ? { stations: [{ id: "8503000", name: "Zürich HB" }] }
+      : undefined);
+    const names = await app.Planner.suggest("HB", []);
+    assert.deepEqual([...names], ["Zürich HB"]);
+  });
+
+  test("entries without id (shops, doctors) are dropped", async () => {
+    const app = loadApp();
+    app.setRoute((path) => path === "locations"
+      ? { stations: [{ id: null, name: "Medbase Apotheke Zürich HB, Zürich, Museumstr. 1" }, { id: "8503000", name: "Zürich HB" }] }
+      : undefined);
+    assert.deepEqual([...await app.TransportApi.locations("Zürich HB")], ["Zürich HB"]);
+  });
+
+  test("Zurich HB without umlaut: only shops → retried as Zuerich HB", async () => {
+    const app = loadApp();
+    app.setRoute((path, params) => {
+      if (path !== "locations") return undefined;
+      return params.get("query") === "Zuerich HB"
+        ? { stations: [{ id: "8503000", name: "Zürich HB" }] }
+        : { stations: [{ id: null, name: "Autop Zürich HB, Zürich, Sihlquai 41" }] };
+    });
+    assert.deepEqual([...await app.TransportApi.locations("Zurich HB")], ["Zürich HB"]);
   });
 
   test("3+ chars: local first, then API hits, no duplicates, max 6", async () => {
     const app = loadApp();
     app.setRoute((path) => path === "locations"
-      ? { stations: ["Zürich HB", "Zürich Oerlikon", "Zürich Altstetten", "Zürich Stadelhofen", "Zürich Hardbrücke", "Zürich Enge", "Zürich Wiedikon"].map((name) => ({ name })) }
+      ? { stations: ["Zürich HB", "Zürich Oerlikon", "Zürich Altstetten", "Zürich Stadelhofen", "Zürich Hardbrücke", "Zürich Enge", "Zürich Wiedikon"].map((name) => ({ id: name, name })) }
       : undefined);
     const names = await app.Planner.suggest("Zür", ["Zürich HB"]);
     assert.equal(names[0], "Zürich HB");
