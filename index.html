@@ -175,9 +175,10 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
 .places .exchange { margin-top: .6rem; }
 .places #px-status:empty { display: none; }
 .ends { flex-wrap: nowrap; }
-/* Ab/An · 📅 · time · Jetzt · 🚆: one line from ~360 px (24-h clock). */
-.when { gap: .3rem; }
-#now { padding: .45rem .45rem; font-size: .9rem; }
+/* Ab/An · 📅 · time · Jetzt on one line; search button below, full width. */
+.when { gap: .4rem; }
+#now { padding: .45rem .6rem; }
+.when .go { flex: 1 1 100%; }
 .cal { padding: .45rem .6rem; font-weight: 400; white-space: nowrap; }
 .go { padding: .45rem .8rem; font-size: 1.1rem; line-height: 1.3; }
 .cal.other { color: var(--ink); border-color: var(--transit); }
@@ -418,7 +419,7 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
     <input type="date" id="date" required hidden>
     <input type="time" id="time" required>
     <button type="button" id="now" class="ghost cal" title="Datum und Zeit auf jetzt">Jetzt</button>
-    <button type="submit" class="go" aria-label="Suchen" title="Suchen">🚆</button>
+    <button type="submit" class="go" title="Suchen">🚆 Suchen</button>
   </div>
 
 </form>
