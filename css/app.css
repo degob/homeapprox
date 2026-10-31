@@ -238,8 +238,8 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
 }
 .legs tr.walk .ln b, .legs tr.change .ln b { background: none; color: var(--walk); border: 1px dashed var(--walk); }
 .legs tr.change .ln b { color: var(--muted); border-color: var(--muted); }
-.legs .dir { color: var(--muted); width: 3.6rem; cursor: pointer; overflow-wrap: anywhere; }
-.legs .dir.open { color: var(--ink); }
+.legs .dir { color: var(--muted); width: 3.6rem; overflow-wrap: anywhere; }
+.legs tr.open .dir { color: var(--ink); }
 
 /* Timeline: walk = dotted green, transit = solid blue, shared time axis. */
 /* Track scrolls horizontally when zoomed; all tracks scroll together.
@@ -357,3 +357,15 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
 .saved li .legs { cursor: default; margin-top: .3rem; }
 .saved li.past { opacity: .5; }
 .saved-tag { color: var(--walk); font-weight: 700; font-size: .9rem; }
+
+/* Tap a ride: its halts until getting off, last one bold. */
+.legs tr.clickable { cursor: pointer; }
+.legs tr.clickable .ln b::after { content: " ▸"; font-size: .7em; }
+.legs tr.clickable.open .ln b::after { content: " ▾"; }
+.legs tr.stops-row td { padding: 0 .25rem .4rem 3.05rem; }
+.halts { list-style: none; margin: 0; padding: 0 0 0 .6rem; border-left: 3px solid var(--transit); }
+.halts li { border: 0; cursor: auto; display: grid; grid-template-columns: 4.3rem minmax(0, 1fr) auto; gap: .4rem; align-items: center; padding: .12rem 0; }
+.halts .htm { font-variant-numeric: tabular-nums; color: var(--muted); white-space: nowrap; }
+.halts .hname { overflow-wrap: anywhere; }
+.halts li.off { font-weight: 700; }
+.halts li.off .htm { color: var(--ink); }

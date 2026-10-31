@@ -74,6 +74,24 @@ export const TransportApi = (() => {
       walkSec,
       tripId: j?.name || "",
       stops: (j?.passList || []).map((p) => p.station?.name).filter(Boolean),
+      passes: (j?.passList || []).filter((p) => p.station?.name).map(toPass),
+    };
+  }
+
+  // One halt of a ride, boarding and alighting stop included. The first has
+  // no arrival, the last no departure (null).
+  //   { name: "Zürich Oerlikon", arr: 16:30, arrDelayMin: 1, dep: 16:31, depDelayMin: 1, platform: "1" }
+  function toPass(p) {
+    const at = (which) => (p[`${which}Timestamp`] ? liveTime(p, which) : { at: null, delayMin: 0 });
+    const arr = at("arrival");
+    const dep = at("departure");
+    return {
+      name: p.station.name,
+      arr: arr.at,
+      arrDelayMin: arr.delayMin,
+      dep: dep.at,
+      depDelayMin: dep.delayMin,
+      platform: p.platform || "",
     };
   }
 

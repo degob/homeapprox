@@ -57,6 +57,12 @@ export const Saved = (() => {
       arrPlatform: l.arrPlatform,
       walkSec: l.walkSec,
       stops: l.stops,
+      passes: (l.passes || []).map((x) => ({
+        name: x.name,
+        platform: x.platform,
+        arrOff: x.arr ? offset(anchor, sched(x.arr, x.arrDelayMin)) : null,
+        depOff: x.dep ? offset(anchor, sched(x.dep, x.depDelayMin)) : null,
+      })),
       depOff: offset(anchor, sched(l.dep, l.depDelayMin)),
       arrOff: offset(anchor, sched(l.arr, l.arrDelayMin)),
     }));
@@ -92,8 +98,17 @@ export const Saved = (() => {
 
   // Journey-like object for one occurrence, on schedule (delays 0).
   function journeyAt(e, anchor) {
+    const at = (off) => (off === null || off === undefined ? null : shift(anchor, off));
     const legs = e.legs.map((l) => ({
       ...l,
+      passes: (l.passes || []).map((x) => ({
+        name: x.name,
+        platform: x.platform,
+        arr: at(x.arrOff),
+        arrDelayMin: 0,
+        dep: at(x.depOff),
+        depDelayMin: 0,
+      })),
       dep: shift(anchor, l.depOff),
       arr: shift(anchor, l.arrOff),
       depDelayMin: 0,

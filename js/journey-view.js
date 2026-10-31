@@ -302,8 +302,74 @@ function renderDetails(j) {
 export function legTable(j) {
   const legs = document.createElement("table");
   legs.className = "legs";
-  legRows(j).forEach((r) => legs.append(legRow(r)));
+  legRows(j).forEach((r) => {
+    const tr = legRow(r);
+    legs.append(tr);
+    if (r.kind === LegKind.RIDE) {
+      const stops = stopsRow(r);
+      legs.append(stops);
+      tr.classList.add("clickable");
+      tr.title = "Haltestellen anzeigen";
+      // Whole row: halts + full headsign (→ ZHB ⇄ → Zürich HB).
+      const dir = tr.querySelector(".dir");
+      tr.addEventListener("click", () => {
+        stops.hidden = !stops.hidden;
+        tr.classList.toggle("open", !stops.hidden);
+        dir.textContent = `→ ${stops.hidden ? Planner.stopAbbr(r.headsign) : r.headsign}`;
+      });
+    }
+  });
   return legs;
+}
+
+// Hidden row under a ride: its halts up to where I get off, with live times.
+//   16:30 +1  Zürich Oerlikon   1
+//   16:35     Zürich HB        32   ← aussteigen
+// Without times (saved before passes were kept): names only.
+function stopsRow(l) {
+  const tr = document.createElement("tr");
+  tr.className = "stops-row";
+  tr.hidden = true;
+  const td = document.createElement("td");
+  td.colSpan = 6;
+  const ol = document.createElement("ol");
+  ol.className = "halts";
+  const passes = l.passes?.length ? l.passes.slice(1) : (l.stops || []).slice(1).map((name) => ({ name }));
+  passes.forEach((x, i) => {
+    const li = document.createElement("li");
+    const last = i === passes.length - 1;
+    li.className = last ? "off" : "";
+    const t = x.arr || x.dep;
+    li.append(t ? timeCellSpan(t, x.arr ? x.arrDelayMin : x.depDelayMin) : document.createElement("span"));
+    const name = document.createElement("span");
+    name.className = "hname";
+    name.textContent = x.name;
+    li.append(name);
+    if (x.platform) {
+      li.append(platformSign(x.platform));
+    }
+    ol.append(li);
+  });
+  if (!passes.length) {
+    ol.textContent = "Keine Haltestellen bekannt";
+  }
+  td.append(ol);
+  tr.append(td);
+  return tr;
+}
+
+function timeCellSpan(at, delayMin) {
+  const span = document.createElement("span");
+  span.className = "htm";
+  span.textContent = hhmm(at);
+  if (delayMin) {
+    const d = document.createElement("span");
+    d.className = "delay";
+    d.textContent = ` ${delayMin > 0 ? "+" : ""}${delayMin}`;
+    d.title = "Minuten gegenüber Fahrplan";
+    span.append(d);
+  }
+  return span;
 }
 
 // "Merken: ☆ Einmal  ☆ Jeden Mittwoch" → after saving "★ Gespeichert".
@@ -381,10 +447,6 @@ function legRow(l) {
   const dir = cell("dir", ride ? `→ ${Planner.stopAbbr(l.headsign)}` : `${l.walkMin} Min.`);
   if (ride) {
     dir.title = l.headsign;
-    dir.addEventListener("click", () => {
-      const open = dir.classList.toggle("open");
-      dir.textContent = `→ ${open ? l.headsign : Planner.stopAbbr(l.headsign)}`;
-    });
   }
 
   tr.append(timeCell("tm", l.dep, l.depDelayMin), from, ln, dir, to, timeCell("tm end", l.arr, l.arrDelayMin));

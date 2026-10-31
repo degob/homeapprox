@@ -137,3 +137,58 @@ describe("saved connections", () => {
     assert.ok(!app.Saved.isLiveRange(row.occ, day(at(9, 0), -10)));
   });
 });
+
+describe("halts of a ride", () => {
+  // Section as transport.opendata.ch sends it: boarding and alighting stop in
+  // passList, prognosis per halt (here +1 except at Zürich HB).
+  const section = (dep) => {
+    const t = (m) => dep.getTime() / 1000 + m * 60;
+    const iso = (m) => new Date((t(m) + 60) * 1000).toISOString();
+    return {
+      journey: { category: "S", number: "8", name: "S8", to: "Winterthur", passList: [
+        { station: { name: "Wallisellen" }, arrivalTimestamp: null, departureTimestamp: t(0), prognosis: { departure: iso(0) }, platform: "4" },
+        { station: { name: "Zürich Oerlikon" }, arrivalTimestamp: t(3), departureTimestamp: t(4), prognosis: { arrival: iso(3), departure: iso(4) }, platform: "1" },
+        { station: { name: "Zürich HB" }, arrivalTimestamp: t(9), departureTimestamp: null, prognosis: {}, platform: "32" },
+      ] },
+      departure: { station: { name: "Wallisellen" }, departureTimestamp: t(0), platform: "4" },
+      arrival: { station: { name: "Zürich HB" }, arrivalTimestamp: t(9), platform: "32" },
+    };
+  };
+  const connOf = (dep) => ({
+    from: { station: { name: "Wallisellen" }, departureTimestamp: dep.getTime() / 1000 },
+    to: { station: { name: "Zürich HB" }, arrivalTimestamp: dep.getTime() / 1000 + 540 },
+    sections: [section(dep)],
+  });
+
+  test("API halts keep times, delays and platforms, ends included", async () => {
+    const app = loadApp();
+    app.setRoute((path) => (path === "connections" ? { connections: [connOf(at(16, 26))] } : undefined));
+    const [trip] = await app.TransportApi.connections("Wallisellen", "Zürich HB", at(16, 20), "depart");
+    const p = trip.legs[0].passes;
+    assert.deepEqual(Array.from(p, (x) => x.name), ["Wallisellen", "Zürich Oerlikon", "Zürich HB"]);
+    assert.equal(p[0].arr, null);
+    assert.equal(hm(p[0].dep), "16:27");
+    assert.equal(p[0].depDelayMin, 1);
+    assert.equal(hm(p[1].arr), "16:30");
+    assert.equal(p[1].platform, "1");
+    assert.equal(hm(p[2].arr), "16:35");
+    assert.equal(p[2].arrDelayMin, 0);
+    assert.equal(p[2].dep, null);
+  });
+
+  test("saved rides keep their halts on schedule for every occurrence", async () => {
+    const app = loadApp();
+    app.setRoute((path) => (path === "connections" ? { connections: [connOf(at(16, 26))] } : undefined));
+    const [trip] = await app.TransportApi.connections("Wallisellen", "Zürich HB", at(16, 20), "depart");
+    const j = {
+      fromPlace: "Wallisellen", toPlace: "Zürich HB", fromStop: "Wallisellen", toStop: "Zürich HB",
+      walkStartMin: 0, walkEndMin: 0, lines: "S8", legs: trip.legs, transitStart: trip.dep, transitEnd: trip.arr,
+    };
+    app.Saved.add(j, true);
+    const [row] = app.Saved.list(day(at(9, 0), 7)); // next Wednesday
+    const p = row.occ.legs[0].passes;
+    assert.equal(ymd(row.occ.start), "28.10.");
+    assert.deepEqual(Array.from(p, (x) => x.arr && hm(x.arr)), [null, "16:29", "16:35"]);
+    assert.equal(p[1].arrDelayMin, 0);
+  });
+});
