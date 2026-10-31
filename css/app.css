@@ -1,0 +1,341 @@
+:root {
+  --bg: #f3f5f7;
+  --surface: #ffffff;
+  --ink: #1c2430;
+  --muted: #6b7685;
+  --line: #d9dee4;
+  --transit: #2b5a8c;
+  --walk: #3e8a5e;
+  --error: #b3261e;
+  --good: #1f8a54;
+  --bad: #8e1b1b;
+  color-scheme: light;
+  box-sizing: border-box;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #161b22;
+    --surface: #1f262f;
+    --ink: #e6eaef;
+    --muted: #97a1ae;
+    --line: #333c47;
+    --transit: #7fb0e3;
+    --walk: #7cc79a;
+    --error: #f2b8b5;
+    --good: #2f9e64;
+    --bad: #b02a2a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #161b22; --surface: #1f262f; --ink: #e6eaef; --muted: #97a1ae;
+  --line: #333c47; --transit: #7fb0e3; --walk: #7cc79a; --error: #f2b8b5;
+  --good: #2f9e64; --bad: #b02a2a;
+  color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: inherit; }
+[hidden] { display: none !important; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 17px/1.5 "Atkinson Hyperlegible", system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+main { max-width: 42rem; margin: 0 auto; padding: 1.5rem .75rem 3rem; }
+.top { display: flex; align-items: center; justify-content: space-between; margin: 0 0 1.25rem; }
+h1 { font-size: 1.6rem; margin: 0; }
+.gear { background: none; color: var(--muted); font-size: 1.4rem; padding: 0 .2rem; line-height: 1; }
+.gear[aria-expanded="true"] { color: var(--transit); }
+
+form { display: grid; gap: .9rem; }
+.row { display: flex; flex-wrap: wrap; gap: .6rem; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.seg input { position: absolute; opacity: 0; }
+.seg label { padding: .45rem .9rem; cursor: pointer; }
+.seg input:checked + label { background: var(--transit); color: var(--bg); }
+.seg input:focus-visible + label { outline: 2px solid var(--transit); outline-offset: -4px; }
+input[type=text], input[type=date], input[type=time] {
+  font: inherit; color: inherit; background: var(--surface);
+  border: 1px solid var(--line); border-radius: 8px; padding: .45rem .6rem;
+}
+input[type=text] { flex: 1 1 14rem; }
+button {
+  font: inherit; font-weight: 700; border: 0; border-radius: 8px;
+  padding: .6rem 1.2rem; background: var(--transit); color: var(--bg); cursor: pointer;
+}
+button:focus-visible, input:focus-visible { outline: 2px solid var(--transit); outline-offset: 2px; }
+
+#status { color: var(--muted); margin: .75rem 0 .5rem; }
+#status:empty { display: none; }
+#status.error { color: var(--error); }
+
+ol { list-style: none; padding: 0; margin: 0; }
+li { padding: .8rem 0; border-bottom: 1px solid var(--line); }
+/* Each connection is a card. */
+#results { display: grid; gap: .75rem; }
+#results > li {
+  padding: .75rem .9rem; border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); box-shadow: 0 1px 3px rgba(0,0,0,.06);
+}
+.times { font-size: 1.35rem; font-weight: 700; display: flex; align-items: center; gap: .5rem; }
+.times .push { margin-left: auto; }
+.times .tt, .dur, .past-tag { white-space: nowrap; }
+
+/* Duration pill, colored on the scale best (--good) → worst (--bad). */
+.dur {
+  font-size: .9rem; font-weight: 700; color: #fff; border-radius: 999px;
+  padding: .05rem .55rem; background: var(--muted);
+}
+/* Summary card: grid, one row per measure.
+   icon | range (fills) | ✂ slot | ↺ slot  — slots fixed so rows align. */
+#summary {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) 1.6rem 1.6rem; gap: .35rem .6rem;
+  align-items: center; margin: .75rem 0; padding: .5rem .75rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+  color: var(--muted);
+}
+#summary .icon { color: var(--transit); font-weight: 700; width: 1.2rem; text-align: center; }
+/* Range may wrap (narrow phones) instead of pushing the buttons out. */
+#summary .range { display: flex; flex-wrap: wrap; align-items: center; gap: .2rem .4rem; min-width: 0; }
+#summary .range .dur, #summary .range .jump { white-space: nowrap; }
+#summary .slot { display: flex; justify-content: center; }
+#summary .jump { cursor: pointer; }
+#summary .jump:hover { outline: 2px solid var(--transit); outline-offset: 1px; border-radius: 4px; }
+#summary .dur.jump:hover { border-radius: 999px; }
+#summary:empty { display: none; }
+button.more {
+  display: block; width: 100%; margin: .75rem 0; background: var(--surface);
+  color: var(--transit); border: 1px solid var(--line);
+}
+button.more:disabled { opacity: .6; cursor: default; }
+/* Left already (up to RECENT_PAST_MIN before the asked time): run? */
+#results > li.past { border-style: dashed; }
+.past-tag {
+  font-size: .8rem; font-weight: 700; color: var(--bad); border: 1px solid currentColor;
+  border-radius: 999px; padding: 0 .45rem;
+}
+/* Small round icon buttons in the summary: cut the top value, reset the cap. */
+.icon-btn {
+  width: 1.6rem; height: 1.6rem; padding: 0; border-radius: 50%;
+  background: var(--surface); color: var(--transit); border: 1px solid var(--line);
+  font-size: .9rem; line-height: 1;
+}
+.meta { color: var(--muted); font-size: .95rem; }
+li.clickable { cursor: pointer; }
+#summary .toggle { cursor: pointer; display: flex; align-items: center; gap: .4rem; }
+#summary .chips { flex-wrap: wrap; gap: .3rem; white-space: normal; }
+.places {
+  margin: 0 0 1rem; padding: .6rem .75rem; color: var(--muted); font-size: .95rem;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+}
+.places h2 { font-size: 1rem; margin: 0 0 .25rem; color: var(--ink); }
+.places ul { list-style: none; padding: 0; margin: .5rem 0; }
+/* Place row: ★ name ✎ × on one line, the stops wrapped underneath.
+   ┌ ★ Zuhause                 ✎ × ┐
+   │   Furtbach 2' · Ifang 6' · …  │ */
+.places li {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; gap: .1rem .5rem;
+  align-items: center; padding: .35rem 0; border-bottom: 1px solid var(--line);
+}
+.places li .pname { color: var(--ink); font-weight: 700; }
+.places li .pstops { grid-column: 2 / -1; font-size: .85rem; }
+.places li { grid-template-columns: auto minmax(0, 1fr) auto; }
+.places h3 { font-size: .95rem; margin: .3rem 0 0; color: var(--ink); }
+.places .stop-row.head { font-size: .75rem; color: var(--muted); padding: 0 .3rem; }
+.places .stop-row.head span:nth-child(n+2) { text-align: center; }
+/* Settings open: the search below is dimmed and inert. */
+main.settings-open > :not(.top):not(#places-panel) { opacity: .35; pointer-events: none; }
+.places .rm { background: none; color: var(--muted); padding: 0 .3rem; font-size: 1rem; line-height: 1; }
+button.danger { color: var(--error); }
+.places .icon-btn.on { color: var(--walk); border-color: var(--walk); }
+.places li .pstops { overflow-wrap: anywhere; }
+.places #place-form { display: grid; gap: .5rem; margin-top: .5rem; }
+/* Stop row: name (fills) | minutes | secondary | × — fits a phone width. */
+.places .stop-row { display: grid; grid-template-columns: minmax(0, 1fr) 3.8rem auto auto; gap: .4rem; align-items: center; }
+.places .stop-row input[type=text] { min-width: 0; width: 100%; }
+.places .stop-row input[type=number] { width: 100%; font: inherit; color: inherit; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: .45rem .3rem; }
+.places .stop-row input[type=checkbox] { margin: 0; accent-color: var(--transit); }
+.places .error { color: var(--error); margin: 0; }
+.places .error:empty { display: none; }
+button.ghost, label.ghost { background: var(--surface); color: var(--transit); border: 1px solid var(--line); }
+label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; cursor: pointer; }
+.places .exchange { margin-top: .6rem; }
+.places #px-status:empty { display: none; }
+.ends { flex-wrap: nowrap; }
+/* Ab/An · 📅 · time · Jetzt on one line; search button below, full width. */
+.when { gap: .4rem; }
+#now { padding: .45rem .6rem; }
+.when .go { flex: 1 1 100%; }
+.cal { padding: .45rem .6rem; font-weight: 400; white-space: nowrap; }
+.go { padding: .45rem .8rem; font-size: 1.1rem; line-height: 1.3; }
+.cal.other { color: var(--ink); border-color: var(--transit); }
+.swap { padding: .45rem .7rem; font-size: 1.1rem; }
+.dests { display: flex; flex-wrap: wrap; gap: .3rem; width: 100%; }
+.dests:empty { display: none; }
+.dest {
+  display: inline-flex; align-items: center; gap: .2rem; font-size: .9rem;
+  padding: .1rem .3rem .1rem .6rem; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--line);
+}
+.dest .rm { background: none; color: var(--muted); padding: 0 .3rem; font-size: 1rem; line-height: 1; }
+.chip {
+  font-size: .8rem; font-weight: 700; padding: .05rem .5rem; border-radius: 999px;
+  background: var(--surface); color: var(--transit); border: 1px solid var(--transit);
+}
+.chip.on { background: var(--transit); color: var(--bg); }
+.caret { background: none; color: var(--muted); padding: 0 .3rem; font-size: 1rem; line-height: 1; }
+#summary .toggle input { margin: 0; accent-color: var(--transit); }
+.details { margin-top: .5rem; padding: .5rem 0 0; border-top: 1px solid var(--line); font-size: .95rem; cursor: default; }
+.alt-btns { display: flex; flex-wrap: wrap; align-items: center; gap: 0 .4rem; }
+.alt-btns .at { font-size: .85rem; font-weight: 700; margin-right: .2rem; }
+.details .alt-btn {
+  font-size: .85rem; font-weight: 700; padding: .3rem .7rem; margin: .3rem 0;
+  background: var(--bg); color: var(--transit); border: 1px solid var(--line);
+}
+/* Alternatives at a transfer: mini timelines around the arrival there. */
+.alts { margin: .4rem 0 .6rem; padding: .5rem .6rem; background: var(--bg); border-radius: 8px; }
+.alts h4 { margin: 0 0 .3rem; font-size: .9rem; }
+.alts .axis { position: relative; }
+/* Planned arrival at the transfer, drawn in each mini bar. */
+.alt-row .bar.mini .now {
+  top: -3px; bottom: -3px; height: auto; width: 0; border-radius: 0;
+  border-left: 2px dashed var(--ink); opacity: .5; pointer-events: none;
+}
+.alt-row { display: grid; grid-template-columns: 7.2rem 1fr 4.6rem; gap: .5rem; align-items: center; padding: .15rem 0; cursor: pointer; }
+.alt-row .t::before { content: "▸ "; color: var(--muted); }
+.alt-row.open .t::before { content: "▾ "; }
+.alt-detail { margin: .1rem 0 .5rem; padding: .3rem .4rem; background: var(--surface); border-radius: 6px; }
+.alt-detail .meta { font-size: .8rem; }
+.alt-row .t { font-size: .85rem; }
+.alt-row .d { font-size: .8rem; text-align: right; color: var(--muted); }
+.alt-row .bar.mini { width: 100%; height: 14px; margin: 0; }
+.alt-row .bar.mini .lbl { line-height: 14px; font-size: .65rem; }
+.alt-row .bar.mini .walk, .alt-row .bar.mini .wait { top: 5px; height: 4px; }
+.alt-row.earlier { opacity: .55; }
+.alt-row.planned .t { font-weight: 700; }
+.alt-row.planned .bar.mini { outline: 2px solid var(--ink); outline-offset: 2px; border-radius: 4px; }
+.alts .legend { font-size: .78rem; color: var(--muted); margin-top: .3rem; }
+/* Leg table: time | on | line | direction | off | time. */
+.legs { width: 100%; border-collapse: collapse; font-size: .85rem; margin: 0 0 .4rem; }
+.legs td { padding: .3rem .25rem; vertical-align: top; border-bottom: 1px solid var(--line); }
+.legs tr:last-child td { border-bottom: 0; }
+.legs .tm { white-space: nowrap; font-weight: 700; width: 2.8rem; }
+.legs .tm.end { text-align: right; }
+.legs .delay { color: var(--bad); font-size: .75rem; }
+.legs .stop { overflow-wrap: anywhere; }
+.legs .gl {
+  display: inline-block; margin-top: .15rem; padding: 0 .3rem; min-width: 1.3rem; text-align: center;
+  font-size: .72rem; font-weight: 700; line-height: 1.3; color: var(--muted);
+  border: 1px solid var(--muted); border-radius: 3px;
+}
+.legs .ln { white-space: nowrap; width: 2.6rem; }
+.legs .ln b {
+  display: inline-block; min-width: 2.2rem; text-align: center; border-radius: 4px;
+  padding: 0 .2rem; background: var(--transit); color: var(--bg); font-size: .8rem;
+}
+.legs tr.walk .ln b, .legs tr.change .ln b { background: none; color: var(--walk); border: 1px dashed var(--walk); }
+.legs tr.change .ln b { color: var(--muted); border-color: var(--muted); }
+.legs .dir { color: var(--muted); width: 3.6rem; cursor: pointer; overflow-wrap: anywhere; }
+.legs .dir.open { color: var(--ink); }
+
+/* Timeline: walk = dotted green, transit = solid blue, shared time axis. */
+/* Track scrolls horizontally when zoomed; all tracks scroll together.
+   touch-action keeps native pans but leaves pinch to our zoom handler. */
+.track {
+  overflow-x: auto; overflow-y: hidden; padding-top: 1.5rem;
+  /* Bleed to the card edges: bars get nearly the full card width. */
+  margin: .4rem calc(6px - .9rem); padding-inline: 0;
+  scrollbar-width: none; touch-action: pan-x pan-y;
+}
+.track::-webkit-scrollbar { display: none; }
+/* Whole list: native vertical scroll only; pinch and sideways swipes are
+   handled by Timeline for all bars together. */
+#results { touch-action: pan-y; }
+.bar { position: relative; height: 18px; width: calc(100% * var(--zoom, 1)); }
+.bar span { position: absolute; top: 0; height: 100%; border-radius: 4px; }
+.bar .walk { background: repeating-linear-gradient(90deg, var(--walk) 0 4px, transparent 4px 7px); top: 7px; height: 4px; }
+.bar .transit { background: var(--transit); }
+/* Wait / platform change: thin muted track, visible only where no leg covers it. */
+.bar .wait { background: var(--line); top: 7px; height: 4px; }
+/* Transfer: gray block over the gap between two rides. */
+.bar .xfer { background: var(--line); border-radius: 0; }
+/* Labels inside bar segments; fitLabels() picks the longest text that fits. */
+.bar .lbl {
+  overflow: hidden; white-space: nowrap; text-align: center;
+  font-size: .72rem; font-weight: 700; line-height: 18px;
+}
+.bar .transit.lbl { color: var(--bg); }
+/* Stop bubble above the bar. Transfer: tip at the gap's middle.
+   Start/end: tip at the bubble's left/right edge, so it stays inside the track. */
+/* placePins() sets `left` (bubble box) and --tip (tip x inside the bubble),
+   so a bubble may slide sideways as long as its tip stays over the stop. */
+.bar .pin {
+  top: auto; bottom: calc(100% + 5px); height: auto;
+  padding: 0 .3rem; border-radius: 4px; white-space: nowrap;
+  font-size: .72rem; line-height: 1.4; background: var(--muted); color: var(--bg);
+}
+.bar .pin::after {
+  content: ""; position: absolute; left: var(--tip, 50%); top: 100%; margin-left: -4px;
+  border: 4px solid transparent; border-top-color: var(--muted);
+}
+/* Custom place (Zuhause, Büro …) at a journey's start or end: green. */
+.bar .pin.place { background: var(--walk); }
+.bar .pin.place::after { border-top-color: var(--walk); }
+.bar .pin.place::before { background: var(--walk); }
+/* Second bubble row, used when names would overlap in one row. A thin line
+   connects the raised bubble down to the bar. */
+.track { --pin-row: 1.35rem; }
+.track.two-rows { padding-top: calc(1.5rem + var(--pin-row)); }
+.bar .pin.up { bottom: calc(100% + 5px + var(--pin-row)); }
+.bar .pin.up::before {
+  content: ""; position: absolute; left: var(--tip, 50%); top: 100%;
+  width: 1px; height: calc(var(--pin-row) + 5px); background: var(--muted);
+}
+
+/* Place field with suggestion dropdown. */
+.place { position: relative; flex: 1 1 14rem; }
+.place input { width: 100%; }
+/* Field holds a known place: ⌂ drawn inside, text shifted right. */
+.place.known::before {
+  content: "⌂"; position: absolute; left: .6rem; top: .45rem; line-height: 1.5;
+  color: var(--walk); font-weight: 700; pointer-events: none;
+}
+.place.known input { padding-left: 1.7rem; }
+/* × inside the field, shown once it has text. */
+.place input { padding-right: 2rem; }
+.place .clear {
+  position: absolute; right: .25rem; top: .3rem; display: none;
+  background: none; color: var(--muted); padding: .1rem .45rem; font-size: 1.1rem; line-height: 1.3;
+}
+.place.filled .clear { display: block; }
+.sugg {
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 2;
+  margin: .2rem 0 0; padding: .25rem 0; list-style: none;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.12);
+}
+.sugg:empty { display: none; }
+.sugg li { display: flex; align-items: center; gap: .5rem; padding: .35rem .6rem; border: 0; cursor: pointer; }
+.sugg li:hover, .sugg li[aria-selected="true"] { background: var(--bg); }
+.sugg .name { flex: 1; }
+.sugg .group { color: var(--muted); font-size: .8rem; padding: .2rem .6rem 0; cursor: default; }
+.sugg .group:hover { background: none; }
+.star { background: none; color: var(--muted); padding: 0 .2rem; font-size: 1.1rem; line-height: 1; }
+.star.on { color: var(--transit); }
+/* Phones: smaller type so "11:42 – 12:13" and both pills fit on one line. */
+@media (max-width: 480px) {
+  body { font-size: 15px; }
+  h1 { font-size: 1.3rem; margin-bottom: .9rem; }
+  .times { font-size: 1.1rem; gap: .35rem; }
+  .dur { font-size: .78rem; padding: 0 .45rem; }
+  .past-tag { font-size: .72rem; padding: 0 .35rem; }
+  .meta { font-size: .85rem; }
+  .seg label { padding: .4rem .6rem; }
+  #summary { font-size: .9rem; }
+  #results > li { padding: .6rem .75rem; }
+  .track { margin-inline: calc(6px - .75rem); }
+  .legs { font-size: .8rem; }
+}

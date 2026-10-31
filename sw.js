@@ -1,13 +1,33 @@
 // Service worker: makes HomeApprox installable and gives an offline fallback.
 //
-//   page (HTML)       → network first (revalidated), cache only when offline
+//   page, js/, css/   → network first (revalidated), cache only when offline,
+//                       so a push shows up on the next load
 //   own static files  → cache first (icons, manifest)
 //   anything else     → not touched (transport API, fonts): always live
 //
 // Bump VERSION when the list of cached files changes.
-const VERSION = "v1";
+const VERSION = "v2";
 const CACHE = `homeapprox-${VERSION}`;
-const SHELL = ["./", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
+// Every js/ module must be listed (checked by tests/pwa.test.mjs).
+const SHELL = [
+  "./",
+  "manifest.webmanifest",
+  "icons/icon-192.png",
+  "icons/icon-512.png",
+  "css/app.css",
+  "js/api.js",
+  "js/app.js",
+  "js/config.js",
+  "js/dom.js",
+  "js/journey-view.js",
+  "js/place-fields.js",
+  "js/places-editor.js",
+  "js/places.js",
+  "js/planner.js",
+  "js/results.js",
+  "js/stations.js",
+  "js/timeline.js",
+];
 const OFFLINE_HTML =
   '<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width">' +
   '<title>HomeApprox</title><body style="font:17px system-ui;padding:2rem;text-align:center">' +
@@ -32,21 +52,32 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return; // API, fonts: never cached
 
   if (req.mode === "navigate") {
-    event.respondWith(
-      fetch(req, { cache: "no-cache" })
-        .then((res) => {
-          if (res.ok) {
-            const copy = res.clone();
-            caches.open(CACHE).then((c) => c.put("./", copy));
-          }
-          return res;
-        })
-        .catch(async () =>
-          (await caches.match("./")) ||
-          new Response(OFFLINE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } })),
-    );
+    event.respondWith(networkFirst(req, "./").catch(() =>
+      new Response(OFFLINE_HTML, { headers: { "Content-Type": "text/html; charset=utf-8" } })));
+    return;
+  }
+  if (/\.(js|css)$/.test(url.pathname)) {
+    event.respondWith(networkFirst(req, req.url));
     return;
   }
 
   event.respondWith(caches.match(req).then((hit) => hit || fetch(req)));
 });
+
+// Network (revalidated) and refresh the cached copy under `key`; offline the
+// cached copy, else the network error.
+function networkFirst(req, key) {
+  return fetch(req, { cache: "no-cache" })
+    .then((res) => {
+      if (res.ok) {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(key, copy));
+      }
+      return res;
+    })
+    .catch(async (err) => {
+      const hit = await caches.match(key);
+      if (hit) return hit;
+      throw err;
+    });
+}

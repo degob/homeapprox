@@ -4,7 +4,7 @@
 
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import vm from "node:vm";
 
 const root = new URL("../", import.meta.url);
@@ -36,6 +36,12 @@ describe("manifest and icons", () => {
     assert.match(html, /<link rel="manifest" href="manifest.webmanifest">/);
     assert.match(html, /rel="apple-touch-icon" href="icons\/apple-touch-icon.png"/);
     assert.match(html, /serviceWorker\.register\("sw.js"\)/);
+  });
+
+  test("index.html loads the stylesheet and the app as ES module", () => {
+    const html = read("index.html").toString();
+    assert.match(html, /<link rel="stylesheet" href="css\/app.css">/);
+    assert.match(html, /<script type="module" src="js\/app.js"><\/script>/);
   });
 });
 
@@ -73,6 +79,33 @@ function loadWorker({ online = true } = {}) {
 }
 
 describe("service worker", () => {
+  test("precaches every js/ module and the stylesheet", async () => {
+    const sw = loadWorker();
+    await new Promise((done) => sw.handlers.install({ waitUntil: (p) => p.then(done) }));
+    const files = readdirSync(new URL("js/", root)).filter((f) => f.endsWith(".js"));
+    for (const f of files) assert.ok(sw.store.has(`js/${f}`), `js/${f} not in SHELL`);
+    assert.ok(sw.store.has("css/app.css"));
+  });
+
+  test("own js/css come from the network (revalidated), cache only offline", async () => {
+    let sw = loadWorker();
+    const url = "https://homeapprox.catala.ch/js/app.js";
+    const res = await sw.fetchEvent(url);
+    assert.equal(res.body, `net:${url}`);
+    assert.equal(sw.net[0].opts.cache, "no-cache");
+    sw = loadWorker({ online: false });
+    sw.store.set(url, "cached app.js");
+    assert.equal(await sw.fetchEvent(url), "cached app.js");
+  });
+
+  test("icons stay cache first", async () => {
+    const sw = loadWorker();
+    const url = "https://homeapprox.catala.ch/icons/icon-192.png";
+    sw.store.set(url, "cached icon");
+    assert.equal(await sw.fetchEvent(url), "cached icon");
+    assert.equal(sw.net.length, 0);
+  });
+
   test("never intercepts the transport API or other origins", async () => {
     const sw = loadWorker();
     assert.equal(await sw.fetchEvent("https://transport.opendata.ch/v1/connections?from=A&to=B"), "untouched");

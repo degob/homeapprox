@@ -1,15 +1,44 @@
-// Loads the <script> of index.html into a Node vm with a minimal DOM stub and
-// a scriptable fetch, so the app's logic can be tested without a browser.
+// Loads the app's ES modules (js/, from app.js in import order) into a Node vm
+// with a minimal DOM stub and a scriptable fetch, so the app's logic can be
+// tested without a browser. A fresh copy per loadApp(), so tests don't share
+// module state.
 //
-//   index.html <script> ──vm──► context ──► { Planner, TransportApi, ... }
-//                                  ▲
-//                     fetch ──► test's route(path, params) → JSON
+//   js/*.js ──strip import/export, concat──vm──► context ──► { Planner, ... }
+//                                                  ▲
+//                                fetch ──► test's route(path, params) → JSON
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 const HTML = fileURLToPath(new URL("../index.html", import.meta.url));
+const JS = new URL("../js/", import.meta.url);
+const IMPORT = /^import\s*\{[^}]*\}\s*from\s*"\.\/([\w-]+)\.js";\n?/gm;
+
+// Module sources in browser evaluation order: depth-first from the entry,
+// dependencies before dependents (a cycle back to a module in progress is skipped).
+export function moduleOrder(entry = "app") {
+  const order = [];
+  const seen = new Set();
+  const visit = (name) => {
+    if (seen.has(name)) return;
+    seen.add(name);
+    const src = readFileSync(new URL(`${name}.js`, JS), "utf8");
+    for (const m of src.matchAll(IMPORT)) visit(m[1]);
+    order.push({ name, src });
+  };
+  visit(entry);
+  return order;
+}
+
+// One classic script with the semantics of the modules: imports dropped (all
+// names share the vm's global scope), `export` keywords removed, strict mode.
+function bundle() {
+  const body = moduleOrder()
+    .map(({ name, src }) => `// ---- ${name}.js\n` + src.replace(IMPORT, "").replace(/^export /gm, ""))
+    .join("\n");
+  return `"use strict";\n${body}`;
+}
 
 // Element stub: accepts every call the UI code makes at load time.
 function element() {
@@ -43,7 +72,8 @@ function storage() {
 // route(path, params) → JSON body | { status } | undefined (= empty answer).
 export function loadApp() {
   const html = readFileSync(HTML, "utf8");
-  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const inline = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+  const scripts = [bundle(), ...inline];
   const elements = new Map();
   const requests = [];
   let route = () => undefined;
