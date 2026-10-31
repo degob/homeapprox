@@ -4,6 +4,7 @@
 import { MS_PER_MIN } from "./config.js";
 import { $, hhmm } from "./dom.js";
 import { Saved, SavedStatus } from "./saved.js";
+import { StopLines } from "./stop-lines.js";
 import { legTable } from "./journey-view.js";
 import { iconButton } from "./results.js";
 
@@ -130,7 +131,12 @@ export const SavedView = (() => {
         return;
       }
       Saved.refresh(r.entry, now)
-        .then((occ) => occ ? ["live", occ] : ["gone", r.occ])
+        .then((occ) => {
+          if (occ) {
+            StopLines.learn([occ]);
+          }
+          return occ ? ["live", occ] : ["gone", r.occ];
+        })
         .catch(() => ["error", r.occ])
         .then(([live, occ]) => {
           const old = list.children[i];

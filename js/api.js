@@ -2,7 +2,7 @@
 
 import {
   API_BASE, BOARD_LIMIT, BOARD_MODES, BoardKind, CONNECTIONS_PER_STOP, LegKind, MS_PER_MIN,
-  MS_PER_SEC, TRANSFER_WALK_MAX_MIN, TimeRef, UMLAUT_VARIANTS, station
+  MS_PER_SEC, STOP_BOARD_LIMIT, TRANSFER_WALK_MAX_MIN, TimeRef, UMLAUT_VARIANTS, station
 } from "./config.js";
 
 export const TransportApi = (() => {
@@ -86,6 +86,7 @@ export const TransportApi = (() => {
     const arr = at("arrival");
     const dep = at("departure");
     return {
+      id: p.station.id || "",
       name: p.station.name,
       arr: arr.at,
       arrDelayMin: arr.delayMin,
@@ -190,6 +191,25 @@ export const TransportApi = (() => {
 
   // Bus/tram times at `station` from `at` on: departures (BoardKind.DEPART)
   // or arrivals (BoardKind.ARRIVE), live when known. Sorted, unique.
+  // Departures at a stop around `at`, every mode, for "which lines halt here".
+  //   [{ line: "S9", dir: "Schaffhausen", dep, stops: [{ id, name }, …] }]
+  // `stops`: where that vehicle halts after this stop (names can be null).
+  async function departures(stop, at, limit = STOP_BOARD_LIMIT) {
+    const params = new URLSearchParams({
+      ...(stop.id ? { id: stop.id } : { station: stop.name }),
+      datetime: fmtBoardTime(at),
+      limit: String(limit),
+      type: "departure",
+    });
+    const data = await board(params);
+    return (data.stationboard || []).map((e) => ({
+      line: lineLabel(e),
+      dir: e.to || "",
+      dep: e.stop?.departureTimestamp ? liveTime(e.stop, "departure").at : null,
+      stops: (e.passList || []).filter((p) => p.station?.id).map((p) => ({ id: p.station.id, name: p.station.name })),
+    }));
+  }
+
   async function boardTimes(station, at, kind) {
     const params = new URLSearchParams({
       station,
@@ -206,5 +226,5 @@ export const TransportApi = (() => {
     return [...new Set(times)].sort((a, b) => a - b).map((t) => new Date(t));
   }
 
-  return { connections, locations, boardTimes, toTransfers };
+  return { connections, locations, boardTimes, departures, toTransfers };
 })();

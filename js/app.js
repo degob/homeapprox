@@ -21,6 +21,7 @@ import { fitLabels, initInputs, onDateChange, onPickDate, showDate } from "./jou
 import { Destinations, closeSuggestions, placeFields } from "./place-fields.js";
 import { PlacesEditor } from "./places-editor.js";
 import { SavedView } from "./saved-view.js";
+import { StopLines } from "./stop-lines.js";
 import { Caps, LineFilter, render, state, walkBox } from "./results.js";
 import { Timeline } from "./timeline.js";
 
@@ -52,6 +53,7 @@ async function onSubmit(e) {
     const from = Places.resolve(origin);
     const pairs = places.map((p) => [from, Places.resolve(p)]);
     state.lastResult = await Planner.searchPairs(pairs, at, timeRef);
+    StopLines.learn(state.lastResult.journeys); // before render: halts show ⇄
     Timeline.reset();
     render();
   } catch (err) {
@@ -120,6 +122,7 @@ async function onMore(side) {
   btn.textContent = "Lädt …";
   try {
     state.lastResult = await Planner.extend(state.lastResult, side);
+    StopLines.learn(state.lastResult.journeys);
     render();
   } catch (err) {
     $("status").className = "error";

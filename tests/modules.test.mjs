@@ -11,7 +11,7 @@ const IMPORT = /^import\s*\{([^}]*)\}\s*from\s*"\.\/([\w-]+)\.js";/gm;
 const EXPORT = /^export\s+(?:async\s+)?(?:const|let|function|class)\s+([A-Za-z_$][\w$]*)/gm;
 
 // Logic and shared helpers: must not depend on UI modules.
-const LOWER = new Set(["config", "dom", "api", "planner", "stations", "places", "saved"]);
+const LOWER = new Set(["config", "dom", "api", "planner", "stations", "places", "saved", "stop-lines"]);
 
 const modules = new Map(moduleOrder().map(({ name, src }) => [name, src]));
 const exportsOf = (src) => new Set([...src.matchAll(EXPORT)].map((m) => m[1]));
@@ -47,6 +47,19 @@ describe("ES modules", () => {
     for (const name of LOWER) {
       for (const { from } of importsOf(modules.get(name))) {
         assert.ok(LOWER.has(from), `${name}.js imports UI module ${from}.js`);
+      }
+    }
+  });
+});
+
+describe("one shared scope in the test bundle", () => {
+  test("no top-level name is declared in two modules", () => {
+    const seen = new Map();
+    const DECL = /^(?:export\s+)?(?:async\s+)?(?:const|let|function|class)\s+([A-Za-z_$][\w$]*)/gm;
+    for (const [name, src] of modules) {
+      for (const m of src.matchAll(DECL)) {
+        assert.ok(!seen.has(m[1]), `${m[1]} in ${seen.get(m[1])}.js and ${name}.js`);
+        seen.set(m[1], name);
       }
     }
   });

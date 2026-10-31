@@ -4,6 +4,7 @@ import { LegKind, TimeRef } from "./config.js";
 import { AltRel, Planner } from "./planner.js";
 import { Places } from "./places.js";
 import { Saved } from "./saved.js";
+import { LinesState, StopLines } from "./stop-lines.js";
 import { $, hhmm, localDateValue, minutes } from "./dom.js";
 import { onNow, startSearch } from "./app.js";
 
@@ -337,17 +338,14 @@ function stopsRow(l) {
   const passes = l.passes?.length ? l.passes.slice(1) : (l.stops || []).slice(1).map((name) => ({ name }));
   passes.forEach((x, i) => {
     const li = document.createElement("li");
-    const last = i === passes.length - 1;
-    li.className = last ? "off" : "";
+    li.className = i === passes.length - 1 ? "off" : "";
     const t = x.arr || x.dep;
     li.append(t ? timeCellSpan(t, x.arr ? x.arrDelayMin : x.depDelayMin) : document.createElement("span"));
     const name = document.createElement("span");
     name.className = "hname";
     name.textContent = x.name;
-    li.append(name);
-    if (x.platform) {
-      li.append(platformSign(x.platform));
-    }
+    const gl = x.platform ? platformSign(x.platform) : document.createElement("span");
+    li.append(name, gl, ...transferBadge(x, l.line, t, li));
     ol.append(li);
   });
   if (!passes.length) {
@@ -356,6 +354,61 @@ function stopsRow(l) {
   td.append(ol);
   tr.append(td);
   return tr;
+}
+
+// Other lines at a halt: ⇄ n (known), ? (unknown), nothing (board: none).
+// Tap the halt: the board is asked once, then the lines show underneath.
+//   ⇄ 2   →   S9 → Schaffhausen, Zürich HB · T10 → Bahnhofplatz
+function transferBadge(stop, ownLine, at, li) {
+  const badge = document.createElement("span");
+  badge.className = "xfer";
+  const list = document.createElement("div");
+  list.className = "xlines";
+  list.hidden = true;
+  const show = (inf) => {
+    badge.className = `xfer ${inf.state}`;
+    badge.textContent = { [LinesState.KNOWN]: `⇄ ${inf.lines.length}`, [LinesState.UNKNOWN]: "?", [LinesState.NONE]: "" }[inf.state];
+    badge.title = {
+      [LinesState.KNOWN]: inf.board ? "Weitere Linien hier" : "Weitere Linien hier (mehr möglich)",
+      [LinesState.UNKNOWN]: "Unbekannt – antippen zum Nachschauen",
+      [LinesState.NONE]: "Keine weiteren Linien",
+    }[inf.state];
+  };
+  const fill = (inf) => {
+    list.replaceChildren(...inf.lines.map((x) => {
+      const row = document.createElement("div");
+      const b = document.createElement("b");
+      b.textContent = x.line;
+      row.append(b, ` → ${x.dirs.join(", ")}`);
+      return row;
+    }));
+    if (!inf.lines.length) {
+      list.textContent = "Keine weiteren Linien";
+    }
+  };
+  show(StopLines.info(stop, ownLine));
+  li.classList.add("clickable");
+  li.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    list.hidden = !list.hidden;
+    if (list.hidden) {
+      return;
+    }
+    const known = StopLines.info(stop, ownLine);
+    fill(known);
+    if (known.board) {
+      return;
+    }
+    list.prepend(Object.assign(document.createElement("div"), { className: "meta", textContent: "Suche …" }));
+    try {
+      const inf = await StopLines.fetch(stop, at || new Date(), ownLine);
+      show(inf);
+      fill(inf);
+    } catch (err) {
+      list.firstChild.textContent = `Fehler: ${err.message}`;
+    }
+  });
+  return [badge, list];
 }
 
 function timeCellSpan(at, delayMin) {

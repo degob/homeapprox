@@ -68,6 +68,7 @@ export const MAX_RESULTS = 15;
 export const STOP_ABBR_MAX = 6;
 export const MS_PER_MIN = 60_000;
 export const MS_PER_SEC = 1_000;
+export const MS_PER_DAY = 24 * 60 * MS_PER_MIN;
 
 export const MIN_QUERY_CHARS = 2;
 export const MAX_SUGGESTIONS = 6;
@@ -86,3 +87,8 @@ export const SAVED_KEY = "homeapprox.saved";
 export const SAVED_KEEP_DAYS = 7; // a past one-off stays (greyed) this long
 export const SAVED_LIVE_DAYS = 7; // only occurrences this close are re-asked live
 export const SAVED_QUERY_LIMIT = 4;
+
+// Lines at stops (see stop-lines.js).
+export const STOP_LINES_KEY = "homeapprox.stoplines";
+export const STOP_BOARD_LIMIT = 30; // departures asked on tap; ~6 KB each at hubs
+export const STOP_LINES_MAX_DAYS = 60; // and always forgotten at the timetable change

@@ -11,11 +11,10 @@
 // (line, boarding stop, scheduled departure) to get live times.
 
 import {
-  LegKind, MS_PER_MIN, SAVED_KEEP_DAYS, SAVED_KEY, SAVED_LIVE_DAYS, SAVED_QUERY_LIMIT, TimeRef,
+  LegKind, MS_PER_DAY, MS_PER_MIN, SAVED_KEEP_DAYS, SAVED_KEY, SAVED_LIVE_DAYS, SAVED_QUERY_LIMIT, TimeRef,
 } from "./config.js";
 import { TransportApi } from "./api.js";
 
-const MS_PER_DAY = 24 * 60 * MS_PER_MIN;
 const shift = (d, min) => new Date(d.getTime() + min * MS_PER_MIN);
 const offset = (from, to) => Math.round((to - from) / MS_PER_MIN);
 const sched = (at, delayMin) => shift(at, -(delayMin || 0));
