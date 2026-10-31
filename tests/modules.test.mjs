@@ -11,7 +11,7 @@ const IMPORT = /^import\s*\{([^}]*)\}\s*from\s*"\.\/([\w-]+)\.js";/gm;
 const EXPORT = /^export\s+(?:async\s+)?(?:const|let|function|class)\s+([A-Za-z_$][\w$]*)/gm;
 
 // Logic and shared helpers: must not depend on UI modules.
-const LOWER = new Set(["config", "dom", "api", "planner", "stations", "places"]);
+const LOWER = new Set(["config", "dom", "api", "planner", "stations", "places", "saved"]);
 
 const modules = new Map(moduleOrder().map(({ name, src }) => [name, src]));
 const exportsOf = (src) => new Set([...src.matchAll(EXPORT)].map((m) => m[1]));

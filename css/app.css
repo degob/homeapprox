@@ -147,7 +147,7 @@ li.clickable { cursor: pointer; }
 .places .stop-row.head { font-size: .75rem; color: var(--muted); padding: 0 .3rem; }
 .places .stop-row.head span:nth-child(n+2) { text-align: center; }
 /* Settings open: the search below is dimmed and inert. */
-main.settings-open > :not(.top):not(#places-panel) { opacity: .35; pointer-events: none; }
+main.settings-open > :not(.top):not(#places-panel):not(#saved-panel) { opacity: .35; pointer-events: none; }
 .places .rm { background: none; color: var(--muted); padding: 0 .3rem; font-size: 1rem; line-height: 1; }
 button.danger { color: var(--error); }
 .places .icon-btn.on { color: var(--walk); border-color: var(--walk); }
@@ -339,3 +339,21 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
   .track { margin-inline: calc(6px - .75rem); }
   .legs { font-size: .8rem; }
 }
+
+/* Saved connections card: one row per ride, click for the legs.
+   ┌ Morgen  16:08 – 16:28 +3        ↻ × ┐
+   │ Zuhause → Zürich HB · S14, S2       │
+   │ jeden Mittwoch · live               │ */
+.top-btns { display: flex; gap: .4rem; align-items: center; }
+.saved-head { display: flex; justify-content: space-between; align-items: center; gap: .5rem; }
+.saved-head #saved-refresh { font-size: .85rem; padding: .3rem .7rem; }
+.saved li { grid-template-columns: minmax(0, 1fr) auto auto; cursor: pointer; }
+.saved li .stimes { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; }
+.saved li .sday { margin-right: .4rem; color: var(--transit); }
+.saved li .sroute, .saved li .smeta, .saved li .legs { grid-column: 1 / -1; }
+.saved li .sroute { color: var(--ink); overflow-wrap: anywhere; }
+.saved li .smeta { font-size: .8rem; }
+.saved li .smeta .gone { color: var(--error); }
+.saved li .legs { cursor: default; margin-top: .3rem; }
+.saved li.past { opacity: .5; }
+.saved-tag { color: var(--walk); font-weight: 700; font-size: .9rem; }

@@ -80,3 +80,9 @@ export const PLACE_ICON = "⌂";
 export const EXPORT_VERSION = 1;
 export const SHARE_PARAM = "places";
 export const EXPORT_FILE = "homeapprox-orte.json";
+
+// Saved connections (see saved.js).
+export const SAVED_KEY = "homeapprox.saved";
+export const SAVED_KEEP_DAYS = 7; // a past one-off stays (greyed) this long
+export const SAVED_LIVE_DAYS = 7; // only occurrences this close are re-asked live
+export const SAVED_QUERY_LIMIT = 4;

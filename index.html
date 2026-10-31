@@ -19,8 +19,19 @@
 <main>
 <header class="top">
   <h1>HomeApprox</h1>
+  <span class="top-btns">
+  <button type="button" id="saved-btn" class="gear" aria-label="Gespeicherte Verbindungen" aria-expanded="false" aria-controls="saved-panel">★</button>
   <button type="button" id="settings" class="gear" aria-label="Einstellungen" aria-expanded="false" aria-controls="places-panel">⚙</button>
+  </span>
 </header>
+<section id="saved-panel" class="places saved" hidden>
+  <div class="saved-head">
+    <h2>★ Gespeichert</h2>
+    <button type="button" id="saved-refresh" class="ghost">Aktualisieren</button>
+  </div>
+  <ul id="saved-list"></ul>
+  <p id="saved-empty" class="meta">Noch nichts gespeichert. In den Details einer Verbindung auf ☆ tippen.</p>
+</section>
 
 <!-- Settings: custom places (name + stops with walk minutes). Opened by the gear. -->
 <section id="places-panel" class="places" hidden>

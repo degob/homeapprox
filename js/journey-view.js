@@ -3,6 +3,7 @@
 import { LegKind, TimeRef } from "./config.js";
 import { AltRel, Planner } from "./planner.js";
 import { Places } from "./places.js";
+import { Saved } from "./saved.js";
 import { $, hhmm, localDateValue, minutes } from "./dom.js";
 import { onNow, startSearch } from "./app.js";
 
@@ -282,9 +283,7 @@ function renderDetails(j) {
   const box = document.createElement("div");
   box.className = "details";
 
-  const legs = document.createElement("table");
-  legs.className = "legs";
-  legRows(j).forEach((r) => legs.append(legRow(r)));
+  const legs = legTable(j);
 
   const q = document.createElement("div");
   q.className = "meta";
@@ -295,8 +294,49 @@ function renderDetails(j) {
   box.addEventListener("click", (e) => e.stopPropagation());
   box.append(legs);
   j.transfers.forEach((x) => box.append(altButton(j, x)));
-  box.append(q);
+  box.append(saveRow(j), q);
   return box;
+}
+
+// Leg table of a journey (also used by the saved panel).
+export function legTable(j) {
+  const legs = document.createElement("table");
+  legs.className = "legs";
+  legRows(j).forEach((r) => legs.append(legRow(r)));
+  return legs;
+}
+
+// "Merken: ☆ Einmal  ☆ Jeden Mittwoch" → after saving "★ Gespeichert".
+function saveRow(j) {
+  const row = document.createElement("div");
+  row.className = "alt-btns save-btns";
+  const label = document.createElement("span");
+  label.className = "at";
+  label.textContent = "Merken:";
+  const done = () => {
+    const t = document.createElement("span");
+    t.className = "saved-tag";
+    t.textContent = "★ Gespeichert";
+    t.title = "Siehe ★ oben";
+    row.replaceChildren(label, t);
+  };
+  const button = (text, weekly) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "alt-btn";
+    b.textContent = text;
+    b.addEventListener("click", () => {
+      Saved.add(j, weekly);
+      done();
+    });
+    return b;
+  };
+  const weekday = j.transitStart.toLocaleDateString("de-CH", { weekday: "long" });
+  row.append(label, button("☆ Einmal", false), button(`☆ Jeden ${weekday}`, true));
+  if (Saved.has(j)) {
+    done();
+  }
+  return row;
 }
 
 // Rows of the leg table, incl. our own walks at custom ends.

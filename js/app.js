@@ -20,6 +20,7 @@ import { $, hhmm, localDateValue } from "./dom.js";
 import { fitLabels, initInputs, onDateChange, onPickDate, showDate } from "./journey-view.js";
 import { Destinations, closeSuggestions, placeFields } from "./place-fields.js";
 import { PlacesEditor } from "./places-editor.js";
+import { SavedView } from "./saved-view.js";
 import { Caps, LineFilter, render, state, walkBox } from "./results.js";
 import { Timeline } from "./timeline.js";
 
@@ -135,6 +136,7 @@ $("earlier").addEventListener("click", () => onMore("earlier"));
 $("later").addEventListener("click", () => onMore("later"));
 placeFields.forEach((f) => f.init());
 PlacesEditor.init();
+SavedView.init();
 $("swap").addEventListener("click", onSwap);
 $("add-dest").addEventListener("click", Destinations.park);
 ["origin", "place"].forEach((id) => $(id).addEventListener("input", markPlaces));

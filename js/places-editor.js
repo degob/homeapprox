@@ -159,6 +159,9 @@ export const PlacesEditor = (() => {
 
   // Shows/hides the card; the search form below is dimmed meanwhile.
   function openSettings(open) {
+    if (open && !$("saved-panel").hidden) {
+      $("saved-btn").click(); // one card at a time
+    }
     $("places-panel").hidden = !open;
     $("settings").setAttribute("aria-expanded", String(open));
     document.querySelector("main")?.classList.toggle("settings-open", open);

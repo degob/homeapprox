@@ -6,7 +6,7 @@
 //   anything else     → not touched (transport API, fonts): always live
 //
 // Bump VERSION when the list of cached files changes.
-const VERSION = "v2";
+const VERSION = "v3";
 const CACHE = `homeapprox-${VERSION}`;
 // Every js/ module must be listed (checked by tests/pwa.test.mjs).
 const SHELL = [
@@ -25,6 +25,8 @@ const SHELL = [
   "js/places.js",
   "js/planner.js",
   "js/results.js",
+  "js/saved-view.js",
+  "js/saved.js",
   "js/stations.js",
   "js/timeline.js",
 ];
