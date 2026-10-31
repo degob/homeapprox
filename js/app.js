@@ -22,6 +22,7 @@ import { Destinations, closeSuggestions, placeFields } from "./place-fields.js";
 import { PlacesEditor } from "./places-editor.js";
 import { SavedView } from "./saved-view.js";
 import { StopLines } from "./stop-lines.js";
+import { StatsView } from "./stats-view.js";
 import { Caps, LineFilter, render, state, walkBox } from "./results.js";
 import { Timeline } from "./timeline.js";
 
@@ -140,6 +141,7 @@ $("later").addEventListener("click", () => onMore("later"));
 placeFields.forEach((f) => f.init());
 PlacesEditor.init();
 SavedView.init();
+StatsView.init();
 $("swap").addEventListener("click", onSwap);
 $("add-dest").addEventListener("click", Destinations.park);
 ["origin", "place"].forEach((id) => $(id).addEventListener("input", markPlaces));

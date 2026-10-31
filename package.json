@@ -4,6 +4,6 @@
   "type": "module",
   "scripts": {
     "start": "npx --yes http-server -c-1 -p 8000",
-    "test": "node --test tests/homeapprox.test.mjs tests/modules.test.mjs tests/saved.test.mjs tests/stop-lines.test.mjs tests/pwa.test.mjs"
+    "test": "node --test tests/homeapprox.test.mjs tests/modules.test.mjs tests/saved.test.mjs tests/stop-lines.test.mjs tests/api-stats.test.mjs tests/pwa.test.mjs"
   }
 }

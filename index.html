@@ -35,7 +35,7 @@
 
 <!-- Settings: custom places (name + stops with walk minutes). Opened by the gear. -->
 <section id="places-panel" class="places" hidden>
-  <h2>⌂ Orte</h2>
+  <h2 id="places-title">⌂ Orte</h2>
   <ul id="places-list"></ul>
   <div id="place-form">
     <h3 id="pf-title">Neuer Ort</h3>
@@ -58,6 +58,13 @@
     <label class="ghost file">Importieren<input type="file" id="px-import" accept="application/json,.json" hidden></label>
   </div>
   <p id="px-status" class="meta" role="status"></p>
+  <!-- Hidden: tap "⌂ Orte" 5× quickly. -->
+  <div id="stats" class="stats" hidden>
+    <h3>API-Aufrufe</h3>
+    <table id="stats-table"></table>
+    <p class="meta">Nur echte Anfragen ans Netz, Zwischengespeichertes zählt nicht. Stundengenau, lokal auf diesem Gerät.</p>
+    <button type="button" id="stats-reset" class="ghost">Zurücksetzen</button>
+  </div>
 </section>
 
 <form id="form">

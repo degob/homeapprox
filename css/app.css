@@ -374,3 +374,11 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
 .xfer.unknown { color: var(--muted); font-weight: 400; }
 .xlines { grid-column: 2 / -1; font-size: .8rem; font-weight: 400; color: var(--muted); padding: .1rem 0 .25rem; }
 .xlines b { color: var(--ink); margin-right: .15rem; }
+/* Hidden API statistics (5× tap on "⌂ Orte"). */
+#places-title { user-select: none; -webkit-user-select: none; cursor: default; }
+.stats { margin-top: .8rem; padding-top: .5rem; border-top: 1px solid var(--line); }
+.stats table { width: 100%; border-collapse: collapse; font-size: .85rem; margin: .3rem 0; }
+.stats th, .stats td { padding: .2rem .3rem; text-align: left; border-bottom: 1px solid var(--line); }
+.stats th { color: var(--muted); font-weight: 400; }
+.stats .n { text-align: right; font-variant-numeric: tabular-nums; }
+.stats td.total { color: var(--ink); font-weight: 700; }

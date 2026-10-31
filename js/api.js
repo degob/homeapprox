@@ -4,8 +4,15 @@ import {
   API_BASE, BOARD_LIMIT, BOARD_MODES, BoardKind, CONNECTIONS_PER_STOP, LegKind, MS_PER_MIN,
   MS_PER_SEC, STOP_BOARD_LIMIT, TRANSFER_WALK_MAX_MIN, TimeRef, UMLAUT_VARIANTS, station
 } from "./config.js";
+import { ApiStats } from "./api-stats.js";
 
 export const TransportApi = (() => {
+  // Every network request goes through here, so it is counted (see api-stats.js).
+  function get(endpoint, params) {
+    ApiStats.record(endpoint);
+    return fetch(`${API_BASE}/${endpoint}?${params}`);
+  }
+
   const pad = (n) => String(n).padStart(2, "0");
   const fmtDate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const fmtTime = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
@@ -113,7 +120,7 @@ export const TransportApi = (() => {
 
   async function stationNames(query) {
     const params = new URLSearchParams({ query, type: "station" });
-    const res = await fetch(`${API_BASE}/locations?${params}`);
+    const res = await get("locations", params);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
@@ -157,7 +164,7 @@ export const TransportApi = (() => {
       limit: String(limit),
     });
 
-    const res = await fetch(`${API_BASE}/connections?${params}`);
+    const res = await get("connections", params);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
@@ -178,7 +185,7 @@ export const TransportApi = (() => {
     if (hit && Date.now() - hit.at < BOARD_CACHE_MS) {
       return hit.data;
     }
-    const data = fetch(`${API_BASE}/stationboard?${params}`).then((res) => {
+    const data = get("stationboard", params).then((res) => {
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }

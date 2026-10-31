@@ -92,3 +92,9 @@ export const SAVED_QUERY_LIMIT = 4;
 export const STOP_LINES_KEY = "homeapprox.stoplines";
 export const STOP_BOARD_LIMIT = 30; // departures asked on tap; ~6 KB each at hubs
 export const STOP_LINES_MAX_DAYS = 60; // and always forgotten at the timetable change
+
+// API call statistics (see api-stats.js), opened by tapping "⌂ Orte" 5× quickly.
+export const API_STATS_KEY = "homeapprox.apistats";
+export const API_STATS_KEEP_DAYS = 90;
+export const STATS_TAPS = 5;
+export const STATS_TAP_WINDOW_MS = 3_000;
