@@ -382,3 +382,7 @@ label.ghost { font-weight: 700; border-radius: 8px; padding: .6rem 1.2rem; curso
 .stats th { color: var(--muted); font-weight: 400; }
 .stats .n { text-align: right; font-variant-numeric: tabular-nums; }
 .stats td.total { color: var(--ink); font-weight: 700; }
+.stats-log { margin: .3rem 0; padding-left: 0; list-style: none; font-size: .85rem; }
+.stats-log li { display: block; padding: .3rem 0; border-bottom: 1px solid var(--line); }
+.stats-log strong { display: block; font-weight: 600; }
+.stats-log .meta { display: block; font-size: inherit; }

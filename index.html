@@ -63,7 +63,13 @@
     <h3>API-Aufrufe</h3>
     <table id="stats-table"></table>
     <p class="meta">Nur echte Anfragen ans Netz, Zwischengespeichertes zählt nicht. Stundengenau, lokal auf diesem Gerät.</p>
-    <button type="button" id="stats-reset" class="ghost">Zurücksetzen</button>
+    <h3>Letzte Suchen</h3>
+    <ol id="stats-log" class="stats-log"></ol>
+    <p class="meta">Basis: erste Abfrage je Haltestellenpaar · Seiten: weitere, bis 30 Min. abgedeckt sind · Tafeln: Bus/Tram-Abfahrten an Zuhause-Haltestellen · Nachfragen: erneute Abfrage zu jeder Bus/Tram-Zeit dieser Tafeln. „Gezeigt“: in der Liste vor Filtern.</p>
+    <div class="row">
+      <button type="button" id="stats-export" class="ghost">Log exportieren</button>
+      <button type="button" id="stats-reset" class="ghost">Zurücksetzen</button>
+    </div>
   </div>
 </section>
 

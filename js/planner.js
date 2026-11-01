@@ -2,11 +2,12 @@
 
 import {
   ALT_BEFORE_MIN, ALT_EARLIER, ALT_LATER, ALT_LIMIT, BOARD_MAX_REQUERIES, BOARD_SLACK_MIN,
-  BoardKind, Direction, LegKind, MAX_PAGES, MAX_RESULTS, MAX_SUGGESTIONS, MIN_QUERY_CHARS,
+  BoardKind, CONNECTIONS_PER_STOP, CallPurpose, Direction, LegKind, MAX_PAGES, MAX_RESULTS, MAX_SUGGESTIONS, MIN_QUERY_CHARS,
   MIN_WINDOW_MIN, MORE_STEP_MIN, MS_PER_MIN, RECENT_PAST_MIN, REQUERY_LIMIT, STOP_ABBR_MAX, Side,
   TimeRef, WalkMode, ZUHAUSE, asPlace, station
 } from "./config.js";
 import { TransportApi } from "./api.js";
+import { CallLog } from "./call-log.js";
 
 export const AltRel = Object.freeze({ EARLIER: "earlier", PLANNED: "planned", LATER: "later" });
 const minutesBetween = (a, b) => Math.round((b - a) / MS_PER_MIN);
@@ -23,7 +24,8 @@ export const Planner = (() => {
     const seen = new Map();
     let at = t;
     for (let page = 0; page < MAX_PAGES; page++) {
-      const trips = await TransportApi.connections(from, to, at, timeRef);
+      const purpose = page ? CallPurpose.PAGE : CallPurpose.BASE;
+      const trips = await TransportApi.connections(from, to, at, timeRef, CONNECTIONS_PER_STOP, purpose);
       const before = seen.size;
       trips.forEach((tr) => seen.set(`${tr.dep.getTime()}|${tr.arr.getTime()}|${tr.lines}`, tr));
       if (!trips.length || seen.size === before) {
@@ -157,7 +159,7 @@ export const Planner = (() => {
 
     const ref = fromSide ? TimeRef.DEPART : TimeRef.ARRIVE;
     const settled = await Promise.allSettled(
-      picked.map((t) => TransportApi.connections(sf.name, st.name, t, ref, REQUERY_LIMIT))
+      picked.map((t) => TransportApi.connections(sf.name, st.name, t, ref, REQUERY_LIMIT, CallPurpose.REQUERY))
     );
     const matches = (trip, t) => {
       const legs = trip.legs;
@@ -352,11 +354,14 @@ export const Planner = (() => {
       }
       journeys = journeys.concat(r.value);
     });
+    const secondary = new Set([...from.stops, ...to.stops].filter((s) => s.secondary).map((s) => s.name));
+    CallLog.note("raw", journeys, secondary);
     journeys = prune(journeys, from, to);
 
     // Keep journeys within the requested window, ordered by departure.
     const fits = timeRef === TimeRef.DEPART ? (j) => j.start >= at : (j) => j.end <= at;
     journeys = journeys.filter(fits).sort((a, b) => a.start - b.start);
+    CallLog.note("kept", journeys);
 
     return { journeys, failed, at, timeRef, ...defaultRange(at, timeRef) };
   }
@@ -463,7 +468,7 @@ export const Planner = (() => {
   //     (one more query if the first doesn't reach that far)
   async function alternatives(j, x) {
     const dest = j.to;
-    const ask = (t) => TransportApi.connections(x.stop, dest, t, TimeRef.DEPART, ALT_LIMIT);
+    const ask = (t) => TransportApi.connections(x.stop, dest, t, TimeRef.DEPART, ALT_LIMIT, CallPurpose.ALT);
     const [before, after] = await Promise.all([ask(shift(x.from, -ALT_BEFORE_MIN)), ask(x.from)]);
     let onward = after.filter((t) => t.dep >= x.from);
     if (onward.length && onward.filter((t) => t.dep > x.to).length < ALT_LATER) {
@@ -506,11 +511,29 @@ export const Planner = (() => {
 
   // Entry point of the form. Ab also fetches what left up to
   // RECENT_PAST_MIN ago; `at` stays the asked time (for the "vor N Min." tag).
-  async function searchPairs(pairs, at, timeRef) {
-    const lookback = timeRef === TimeRef.DEPART ? RECENT_PAST_MIN : 0;
-    const r = await planPairs(pairs, shift(at, -lookback), timeRef);
-    const hi = timeRef === TimeRef.DEPART ? shift(at, MIN_WINDOW_MIN) : r.hi;
-    return { ...r, at, hi, params: { pairs, timeRef } };
+  // Runs a search or extension under the call log, noting what the list
+  // shows (before the UI's walk/duration/line filters).
+  async function logged(kind, meta, run) {
+    const log = CallLog.begin(kind, meta);
+    try {
+      const r = await run();
+      CallLog.note("shown", visible(r, WalkMode.SHOW));
+      CallLog.end(log, { failed: r.failed });
+      return r;
+    } catch (err) {
+      CallLog.end(log, { error: err });
+      throw err;
+    }
+  }
+
+  function searchPairs(pairs, at, timeRef) {
+    const meta = { pairs: pairs.map(pairLabel), at: at.toISOString(), timeRef };
+    return logged("search", meta, async () => {
+      const lookback = timeRef === TimeRef.DEPART ? RECENT_PAST_MIN : 0;
+      const r = await planPairs(pairs, shift(at, -lookback), timeRef);
+      const hi = timeRef === TimeRef.DEPART ? shift(at, MIN_WINDOW_MIN) : r.hi;
+      return { ...r, at, hi, params: { pairs, timeRef } };
+    });
   }
 
   // Direction form of searchPairs (tests).
@@ -520,7 +543,12 @@ export const Planner = (() => {
   // merge, widen the window.
   //   Ab: earlier = depart from lo − step; later = depart from hi
   //   An: earlier = arrive by lo;          later = arrive by hi + step
-  async function extend(result, side) {
+  function extend(result, side) {
+    const { pairs, timeRef } = result.params;
+    return logged("extend", { pairs: pairs.map(pairLabel), side, timeRef }, () => extendRaw(result, side));
+  }
+
+  async function extendRaw(result, side) {
     const { pairs, timeRef } = result.params;
     const earlier = side === "earlier";
     const depart = timeRef === TimeRef.DEPART;

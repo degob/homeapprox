@@ -1,16 +1,27 @@
 // TransportApi: raw HTTP, nothing else knows the API shape
 
 import {
-  API_BASE, BOARD_LIMIT, BOARD_MODES, BoardKind, CONNECTIONS_PER_STOP, LegKind, MS_PER_MIN,
+  API_BASE, BOARD_LIMIT, BOARD_MODES, BoardKind, CONNECTIONS_PER_STOP, CallPurpose, LegKind, MS_PER_MIN,
   MS_PER_SEC, STOP_BOARD_LIMIT, TRANSFER_WALK_MAX_MIN, TimeRef, UMLAUT_VARIANTS, station
 } from "./config.js";
 import { ApiStats } from "./api-stats.js";
+import { CallLog } from "./call-log.js";
 
 export const TransportApi = (() => {
-  // Every network request goes through here, so it is counted (see api-stats.js).
-  function get(endpoint, params) {
+  // Every network request goes through here, so it is counted (api-stats.js)
+  // and logged with its purpose (call-log.js).
+  async function get(endpoint, params, purpose) {
     ApiStats.record(endpoint);
-    return fetch(`${API_BASE}/${endpoint}?${params}`);
+    const c = CallLog.call(endpoint, params, purpose);
+    const t0 = Date.now();
+    try {
+      const res = await fetch(`${API_BASE}/${endpoint}?${params}`);
+      CallLog.done(c, res, Date.now() - t0);
+      return res;
+    } catch (err) {
+      CallLog.done(c, null, Date.now() - t0);
+      throw err;
+    }
   }
 
   const pad = (n) => String(n).padStart(2, "0");
@@ -120,12 +131,13 @@ export const TransportApi = (() => {
 
   async function stationNames(query) {
     const params = new URLSearchParams({ query, type: "station" });
-    const res = await get("locations", params);
+    const res = await get("locations", params, CallPurpose.SUGGEST);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
 
     const data = await res.json();
+    CallLog.found(res, (data.stations || []).length);
     // Entries without id are shops, doctors … (the API's fallback), no stops.
     return (data.stations || []).filter((s) => s.id).map((s) => s.name).filter(Boolean);
   }
@@ -154,7 +166,8 @@ export const TransportApi = (() => {
     return [...new Set(found)];
   }
 
-  async function connections(from, to, at, timeRef, limit = CONNECTIONS_PER_STOP) {
+  // purpose: why it is asked, for the call log (CallPurpose).
+  async function connections(from, to, at, timeRef, limit = CONNECTIONS_PER_STOP, purpose = CallPurpose.BASE) {
     const params = new URLSearchParams({
       from,
       to,
@@ -164,12 +177,13 @@ export const TransportApi = (() => {
       limit: String(limit),
     });
 
-    const res = await get("connections", params);
+    const res = await get("connections", params, purpose);
     if (!res.ok) {
       throw new Error(`HTTP ${res.status}`);
     }
 
     const data = await res.json();
+    CallLog.found(res, (data.connections || []).length);
     return (data.connections || []).map(toTrip);
   }
 
@@ -179,17 +193,19 @@ export const TransportApi = (() => {
   const boardCache = new Map();
   const BOARD_CACHE_MS = 60_000;
 
-  async function board(params) {
+  async function board(params, purpose) {
     const key = params.toString();
     const hit = boardCache.get(key);
     if (hit && Date.now() - hit.at < BOARD_CACHE_MS) {
       return hit.data;
     }
-    const data = get("stationboard", params).then((res) => {
+    const data = get("stationboard", params, purpose).then(async (res) => {
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
-      return res.json();
+      const d = await res.json();
+      CallLog.found(res, (d.stationboard || []).length);
+      return d;
     });
     boardCache.set(key, { at: Date.now(), data });
     data.catch(() => boardCache.delete(key));
@@ -208,7 +224,7 @@ export const TransportApi = (() => {
       limit: String(limit),
       type: "departure",
     });
-    const data = await board(params);
+    const data = await board(params, CallPurpose.STOP_BOARD);
     return (data.stationboard || []).map((e) => ({
       line: lineLabel(e),
       dir: e.to || "",
@@ -225,7 +241,7 @@ export const TransportApi = (() => {
       type: kind === BoardKind.ARRIVE ? "arrival" : "departure",
     });
     BOARD_MODES.forEach((m) => params.append("transportations[]", m));
-    const data = await board(params);
+    const data = await board(params, CallPurpose.BOARD);
     const which = kind === BoardKind.ARRIVE ? "arrival" : "departure";
     const times = (data.stationboard || [])
       .filter((e) => e.stop?.[`${which}Timestamp`])

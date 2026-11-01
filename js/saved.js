@@ -11,7 +11,7 @@
 // (line, boarding stop, scheduled departure) to get live times.
 
 import {
-  LegKind, MS_PER_DAY, MS_PER_MIN, SAVED_KEEP_DAYS, SAVED_KEY, SAVED_LIVE_DAYS, SAVED_QUERY_LIMIT, TimeRef,
+  CallPurpose, LegKind, MS_PER_DAY, MS_PER_MIN, SAVED_KEEP_DAYS, SAVED_KEY, SAVED_LIVE_DAYS, SAVED_QUERY_LIMIT, TimeRef,
 } from "./config.js";
 import { TransportApi } from "./api.js";
 
@@ -212,7 +212,7 @@ export const Saved = (() => {
   async function refresh(e, now = new Date()) {
     const occ = occurrence(e, now);
     const want = occ.legs.filter((l) => l.kind === LegKind.RIDE).map((l) => `${l.line}|${l.from}|${l.dep.getTime()}`);
-    const trips = await TransportApi.connections(e.fromStop, e.toStop, shift(occ.anchor, -1), TimeRef.DEPART, SAVED_QUERY_LIMIT);
+    const trips = await TransportApi.connections(e.fromStop, e.toStop, shift(occ.anchor, -1), TimeRef.DEPART, SAVED_QUERY_LIMIT, CallPurpose.SAVED);
     const match = trips.find((t) => {
       const got = t.legs
         .filter((l) => l.kind === LegKind.RIDE)

@@ -98,3 +98,21 @@ export const API_STATS_KEY = "homeapprox.apistats";
 export const API_STATS_KEEP_DAYS = 90;
 export const STATS_TAPS = 5;
 export const STATS_TAP_WINDOW_MS = 3_000;
+
+// Call log (see call-log.js): why each request was made, and per search what
+// it cost and found. Shown and exported in the statistics card.
+export const CallPurpose = Object.freeze({
+  BASE: "base", // first connections query of a stop pair
+  PAGE: "page", // further pages until MIN_WINDOW_MIN is covered
+  BOARD: "board", // bus/tram board at a custom end
+  REQUERY: "requery", // connections asked again at a board time (board re-ask)
+  ALT: "alt", // alternatives at a transfer
+  SAVED: "saved", // live times of saved connections
+  STOP_BOARD: "stopboard", // lines at a halt, on tap
+  SUGGEST: "suggest", // place field suggestions
+});
+export const LOG_KEY = "homeapprox.calllog";
+export const LOG_MAX_SEARCHES = 200;
+export const LOG_MAX_CALLS = 3000; // ~150 B each
+export const LOG_SHOWN = 10;
+export const LOG_FILE = "homeapprox-log.json";
